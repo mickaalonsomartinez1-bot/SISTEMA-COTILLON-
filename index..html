@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sistema Conjunto · Angel's Design × Cotillón Arcoíris</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root{
+  --blue:#1B4FCC;--blue-pale:#EFF4FF;
+  --orange:#F97316;--orange-pale:#FFF7ED;
+  --black:#0A0A0A;--white:#fff;--gray:#7C8894;--gray-light:#F7F8FA;--gray-border:#E5E7EB;
+  --red:#DC2626;--red-pale:#FEF2F2;--green:#059669;
+}
+*{box-sizing:border-box;}
+body{margin:0;font-family:'Inter',sans-serif;background:var(--gray-light);color:var(--black);}
+.disp{font-family:'Bebas Neue',sans-serif;letter-spacing:1px;}
+.wrap{max-width:980px;margin:0 auto;}
+.in{width:100%;border:1.5px solid var(--gray-border);border-radius:8px;padding:10px 12px;font-size:.9rem;outline:none;font-family:'Inter',sans-serif;}
+.in:focus{border-color:var(--blue);}
+select.in{background:#fff;}
+.btn{border:none;border-radius:10px;padding:11px 16px;font-weight:700;font-size:.9rem;cursor:pointer;font-family:'Inter',sans-serif;}
+.btn-blue{background:var(--blue);color:#fff;}
+.btn-orange{background:var(--orange);color:#fff;}
+.btn-black{background:var(--black);color:#fff;}
+.btn-red{background:var(--red);color:#fff;}
+.btn-ghost{background:#fff;border:1.5px solid var(--gray-border);}
+.card{background:#fff;border:1px solid var(--gray-border);border-radius:14px;padding:16px;}
+.label{font-size:.68rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--gray);margin-bottom:6px;display:block;}
+.pill{border-radius:999px;padding:4px 10px;font-size:.7rem;font-weight:700;}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;vertical-align:middle;}
+table{width:100%;border-collapse:collapse;font-size:.88rem;}
+th{text-align:left;font-size:.65rem;text-transform:uppercase;letter-spacing:.06em;color:var(--gray);padding:8px 10px;border-bottom:1px solid #F0F1F3;}
+td{padding:10px;border-bottom:1px solid #F5F6F7;}
+tr:last-child td{border-bottom:none;}
+.tab{padding:10px 14px;font-size:.78rem;font-weight:700;border:none;background:none;color:var(--gray);border-bottom:2px solid transparent;cursor:pointer;white-space:nowrap;}
+.tab.active{color:var(--blue);border-color:var(--blue);}
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.4);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px;overflow-y:auto;}
+.modal{background:#fff;border-radius:16px;padding:20px;width:100%;max-width:420px;max-height:90vh;overflow-y:auto;margin:auto;}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+.grid5{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;}
+@media(min-width:640px){.grid5{grid-template-columns:repeat(5,1fr);}}
+.bar-row{display:flex;align-items:center;gap:8px;margin-bottom:8px;}
+.bar-track{flex:1;background:#F0F1F3;border-radius:6px;height:18px;overflow:hidden;}
+.bar-fill{height:100%;border-radius:6px;}
+</style>
+</head>
+<body>
+<div id="app" class="wrap" style="padding:20px 16px 60px;"></div>
+
+<script type="module">
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+
+/* ======================================================
+   1) CONFIGURACIÓN — pegar acá los datos del proyecto NUEVO de Supabase
+   ====================================================== */
+const SUPABASE_URL = "https://dlubzvvogzbhlninzhyz.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImRsdWJ6dnZvZ3piaGxuaW56aHl6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUzNTMwOTksImV4cCI6MjEwMDkyOTA5OX0.SZxHrGhtPkFgpwCUKthjmUJvt5JWDAF1iBPgzzdp7nk";
+
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+const ROLES = {
+  angels:   { label: "Angel's Design",     color: "#1B4FCC", pale: "#EFF4FF" },
+  cotillon: { label: "Cotillón Arcoíris",  color: "#F97316", pale: "#FFF7ED" },
+};
+
+let session = null, me = { label: "", role: "angels" };
+let tab = "dashboard";
+let products = [], movements = [], invoices = [], pedidos = [], notas = [];
+let channel = null;
+
+const app = document.getElementById("app");
+const money = (n) => Number(n || 0).toLocaleString("es-AR", { style: "currency", currency: "ARS", maximumFractionDigits: 0 });
+const fmtDate = (iso) => new Date(iso).toLocaleString("es-AR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+const roleOf = (r) => ROLES[r] || ROLES.angels;
+const dot = (role) => `<span class="dot" style="background:${roleOf(role).color}"></span>`;
+
+/* ======================================================
+   Auth
+   ====================================================== */
+async function init() {
+  const { data } = await supabase.auth.getSession();
+  session = data.session;
+  if (session) { setMe(); await loadAll(); subscribeRealtime(); }
+  render();
+}
+function setMe() {
+  me = {
+    label: session.user.user_metadata?.label || session.user.email,
+    role: session.user.user_metadata?.role === "cotillon" ? "cotillon" : "angels",
+  };
+}
+supabase.auth.onAuthStateChange((_e, s) => {
+  session = s;
+  if (s) { setMe(); loadAll().then(() => { subscribeRealtime(); render(); }); }
+  else render();
+});
+async function login(email, password, errEl) {
+  errEl.textContent = "Ingresando...";
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) errEl.textContent = "Usuario o contraseña incorrectos.";
+}
+async function logout() { await supabase.auth.signOut(); if (channel) supabase.removeChannel(channel); }
+
+/* ======================================================
+   Data
+   ====================================================== */
+async function loadAll() {
+  const [p, m, i, pe, no] = await Promise.all([
+    supabase.from("products").select("*").order("name"),
+    supabase.from("movements").select("*").order("created_at", { ascending: false }).limit(300),
+    supabase.from("invoices").select("*").order("created_at", { ascending: false }),
+    supabase.from("pedidos").select("*").order("created_at", { ascending: false }),
+    supabase.from("notas").select("*").order("created_at", { ascending: false }).limit(100),
+  ]);
+  products = p.data || []; movements = m.data || []; invoices = i.data || [];
+  pedidos = pe.data || []; notas = no.data || [];
+}
+function subscribeRealtime() {
+  if (channel) supabase.removeChannel(channel);
+  channel = supabase.channel("sync")
+    .on("postgres_changes", { event: "*", schema: "public", table: "products" }, () => loadAll().then(render))
+    .on("postgres_changes", { event: "*", schema: "public", table: "movements" }, () => loadAll().then(render))
+    .on("postgres_changes", { event: "*", schema: "public", table: "invoices" }, () => loadAll().then(render))
+    .on("postgres_changes", { event: "*", schema: "public", table: "pedidos" }, () => loadAll().then(render))
+    .on("postgres_changes", { event: "*", schema: "public", table: "notas" }, () => loadAll().then(render))
+    .subscribe();
+}
+async function logMovement(type, extra) {
+  await supabase.from("movements").insert({ user_label: me.label, user_role: me.role, type, ...extra });
+}
+
+/* ======================================================
+   Render root
+   ====================================================== */
+function render() { session ? renderShell() : renderLogin(); }
+
+function renderLogin() {
+  app.innerHTML = `
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:70vh;text-align:center;">
+      <div style="width:52px;height:52px;border-radius:14px;background:linear-gradient(135deg,var(--blue),var(--orange));display:flex;align-items:center;justify-content:center;margin-bottom:18px;">
+        <span style="color:#fff;font-size:22px;">📦</span>
+      </div>
+      <p class="disp" style="font-size:1.7rem;margin:0;">SISTEMA CONJUNTO</p>
+      <p style="color:var(--gray);font-size:.85rem;margin:2px 0 26px;">Angel's Design × Cotillón Arcoíris</p>
+      <div class="card" style="width:100%;max-width:320px;">
+        <label class="label">Email</label>
+        <input id="loginEmail" class="in" style="margin-bottom:12px;" placeholder="tu@email.com" />
+        <label class="label">Contraseña</label>
+        <input id="loginPass" type="password" class="in" style="margin-bottom:16px;" placeholder="••••••••" />
+        <button id="loginBtn" class="btn btn-blue" style="width:100%;">Ingresar</button>
+        <p id="loginErr" style="color:var(--red);font-size:.78rem;margin-top:10px;min-height:16px;"></p>
+      </div>
+    </div>`;
+  document.getElementById("loginBtn").onclick = () =>
+    login(document.getElementById("loginEmail").value.trim(), document.getElementById("loginPass").value, document.getElementById("loginErr"));
+}
+
+function renderShell() {
+  const r = roleOf(me.role);
+  app.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0 14px;">
+      <div>
+        <p class="disp" style="font-size:1.25rem;margin:0;">SISTEMA <span style="color:var(--blue);">ANGEL'S</span> <span style="color:var(--orange);">× COTILLÓN</span></p>
+        <p style="font-size:.65rem;color:var(--gray);text-transform:uppercase;letter-spacing:.08em;margin:2px 0 0;">Sincronizado en vivo</p>
+      </div>
+      <button id="logoutBtn" class="pill" style="background:${r.pale};color:${r.color};border:none;cursor:pointer;">${dot(me.role)}${esc(me.label)} · Salir</button>
+    </div>
+    <div style="display:flex;gap:2px;border-bottom:1px solid var(--gray-border);overflow-x:auto;margin-bottom:16px;">
+      ${tabBtn("dashboard","Resumen")}${tabBtn("productos","Productos")}${tabBtn("stock","Stock")}${tabBtn("pedidos","Pedidos")}${tabBtn("facturas","Facturas")}${tabBtn("notas","Notas")}${tabBtn("historial","Historial")}
+    </div>
+    <div id="tabContent"></div>`;
+  document.getElementById("logoutBtn").onclick = logout;
+  document.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => { tab = b.dataset.tab; render(); }));
+
+  const c = document.getElementById("tabContent");
+  if (tab === "dashboard") c.innerHTML = renderDashboard();
+  if (tab === "productos") { c.innerHTML = renderProductos(); bindProductos(); }
+  if (tab === "stock") { c.innerHTML = renderStock(); bindStock(); }
+  if (tab === "pedidos") { c.innerHTML = renderPedidos(); bindPedidos(); }
+  if (tab === "facturas") { c.innerHTML = renderFacturas(); bindFacturas(); }
+  if (tab === "notas") { c.innerHTML = renderNotas(); bindNotas(); }
+  if (tab === "historial") c.innerHTML = renderHistorial();
+
+  const goStock = document.getElementById("goStock");
+  if (goStock) goStock.onclick = () => { tab = "stock"; render(); };
+  const goPedidos = document.getElementById("goPedidos");
+  if (goPedidos) goPedidos.onclick = () => { tab = "pedidos"; render(); };
+}
+function tabBtn(id, label) { return `<button class="tab ${tab === id ? "active" : ""}" data-tab="${id}">${label}</button>`; }
+function emptyState(text) { return `<div style="border:1.5px dashed var(--gray-border);border-radius:12px;padding:28px;text-align:center;color:#9AA6B0;font-size:.85rem;">${text}</div>`; }
+
+/* ======================================================
+   Dashboard: stats + más vendidos + recomendaciones
+   ====================================================== */
+function salesByProduct() {
+  const map = {};
+  movements.filter((m) => m.type === "venta").forEach((m) => {
+    map[m.product_name] = (map[m.product_name] || 0) + (m.qty || 0);
+  });
+  return Object.entries(map).sort((a, b) => b[1] - a[1]);
+}
+
+function renderDashboard() {
+  const critical = products.filter((p) => (p.stock || 0) <= p.critical_stock);
+  const totalUnits = products.reduce((s, p) => s + (p.stock || 0), 0);
+  const pendientes = pedidos.filter((p) => p.status === "pendiente");
+  const top = salesByProduct().slice(0, 5);
+  const maxSold = top.length ? top[0][1] : 1;
+
+  // Recomendación: productos que más se venden y ya están cerca del crítico
+  const soldMap = Object.fromEntries(salesByProduct());
+  const recos = products
+    .filter((p) => (soldMap[p.name] || 0) > 0 && (p.stock || 0) <= p.critical_stock * 1.8)
+    .sort((a, b) => (soldMap[b.name] || 0) - (soldMap[a.name] || 0))
+    .slice(0, 4);
+
+  return `
+    <div class="grid5" style="margin-bottom:20px;">
+      ${statCard(products.length, "Productos")}
+      ${statCard(totalUnits, "Unidades stock")}
+      ${statCard(critical.length, "Stock crítico", critical.length > 0)}
+      ${statCard(pendientes.length, "Pedidos pendientes", pendientes.length > 0, "orange")}
+      ${statCard(invoices.length, "Facturas")}
+    </div>
+
+    ${critical.length > 0 ? `
+      <div class="card" style="border-color:#FCA5A5;background:var(--red-pale);margin-bottom:16px;">
+        <p style="font-weight:800;color:var(--red);font-size:.85rem;margin:0 0 10px;">⚠️ Necesitan reposición urgente</p>
+        ${critical.map((p) => `<div style="display:flex;justify-content:space-between;font-size:.85rem;padding:3px 0;">
+          <span><b>${esc(p.name)}</b> <span style="color:#9AA6B0;">· ${esc(p.code)}</span></span>
+          <span style="color:var(--red);font-weight:700;">${p.stock || 0} / mín. ${p.critical_stock}</span></div>`).join("")}
+        <button id="goStock" style="background:none;border:none;color:var(--red);font-weight:700;font-size:.75rem;text-decoration:underline;padding:0;margin-top:8px;cursor:pointer;">Ir a reponer stock →</button>
+      </div>` : ""}
+
+    ${pendientes.length > 0 ? `
+      <div class="card" style="border-color:#FED7AA;background:var(--orange-pale);margin-bottom:16px;">
+        <p style="font-weight:800;color:var(--orange);font-size:.85rem;margin:0 0 6px;">📋 Tenés ${pendientes.length} pedido(s) esperando</p>
+        <button id="goPedidos" style="background:none;border:none;color:var(--orange);font-weight:700;font-size:.75rem;text-decoration:underline;padding:0;cursor:pointer;">Ver pedidos →</button>
+      </div>` : ""}
+
+    ${recos.length > 0 ? `
+      <div class="card" style="margin-bottom:16px;">
+        <p class="label" style="margin-bottom:10px;">💡 Recomendado reponer pronto</p>
+        <p style="font-size:.78rem;color:var(--gray);margin:0 0 10px;">Se venden rápido y están quedando bajos de stock.</p>
+        ${recos.map((p) => `<div style="display:flex;justify-content:space-between;font-size:.85rem;padding:4px 0;border-bottom:1px solid #F5F6F7;">
+          <span><b>${esc(p.name)}</b></span>
+          <span style="color:var(--gray);">${soldMap[p.name] || 0} vendidos · stock ${p.stock || 0}</span></div>`).join("")}
+      </div>` : ""}
+
+    <div class="card" style="margin-bottom:16px;">
+      <p class="label" style="margin-bottom:10px;">🏆 Productos más vendidos</p>
+      ${top.length === 0 ? emptyState("Todavía no hay ventas registradas.") : top.map(([name, qty]) => `
+        <div class="bar-row">
+          <span style="width:130px;font-size:.8rem;flex-shrink:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(name)}</span>
+          <div class="bar-track"><div class="bar-fill" style="width:${(qty / maxSold) * 100}%;background:var(--blue);"></div></div>
+          <span style="font-size:.78rem;font-weight:700;width:34px;text-align:right;">${qty}</span>
+        </div>`).join("")}
+    </div>
+
+    <p class="label" style="margin-bottom:8px;">Actividad reciente</p>
+    ${movements.length === 0 ? emptyState("Todavía no hay movimientos.") : `<div class="card" style="padding:0;">${movements.slice(0,6).map(movementRow).join("")}</div>`}
+  `;
+}
+function statCard(value, label, alert, color) {
+  const c = alert ? (color === "orange" ? "var(--orange)" : "var(--red)") : "var(--black)";
+  const bg = alert ? (color === "orange" ? "var(--orange-pale)" : "var(--red-pale)") : "#fff";
+  const bd = alert ? (color === "orange" ? "#FED7AA" : "#FCA5A5") : "var(--gray-border)";
+  return `<div class="card" style="background:${bg};border-color:${bd};">
+    <p class="disp" style="font-size:1.5rem;margin:0;color:${c};">${value}</p>
+    <p style="font-size:.62rem;font-weight:700;text-transform:uppercase;color:var(--gray);margin:2px 0 0;">${label}</p></div>`;
+}
+function movementRow(m) {
+  const meta = {
+    venta: ["🔻","Venta"], reposicion: ["🔺","Reposición"], producto_creado: ["➕","Producto creado"],
+    producto_editado: ["✏️","Producto editado"], producto_eliminado: ["🗑️","Producto eliminado"],
+    pedido_creado: ["📋","Pedido creado"], pedido_completado: ["✅","Pedido completado"], nota: ["📝","Nota"],
+  }[m.type] || ["•", m.type];
+  return `<div style="display:flex;gap:10px;padding:10px 12px;border-bottom:1px solid #F5F6F7;">
+    <span>${meta[0]}</span>
+    <div style="flex:1;">
+      <p style="margin:0;font-size:.85rem;"><b>${meta[1]}</b>${m.product_name ? " · " + esc(m.product_name) : ""}${typeof m.qty === "number" ? " · " + m.qty + " u." : ""}</p>
+      <p style="margin:2px 0 0;font-size:.72rem;color:#9AA6B0;">${fmtDate(m.created_at)} · ${dot(m.user_role)}<b>${esc(m.user_label)}</b>${m.note ? " · " + esc(m.note) : ""}</p>
+    </div></div>`;
+}
+
+/* ======================================================
+   Productos
+   ====================================================== */
+function renderProductos() {
+  return `<div style="display:flex;gap:8px;margin-bottom:14px;">
+    <input id="qSearch" class="in" placeholder="Buscar por nombre o código..." />
+    <button id="newProd" class="btn btn-blue" style="white-space:nowrap;">+ Producto</button>
+  </div>
+  <div id="prodTableWrap">${productsTable(products)}</div>
+  <div id="prodModalWrap"></div>`;
+}
+function productsTable(list) {
+  if (list.length === 0) return emptyState(products.length === 0 ? "Cargá el primer producto para empezar." : "No hay resultados.");
+  return `<div class="card" style="padding:0;overflow:hidden;"><table>
+    <thead><tr><th>Código</th><th>Nombre</th><th>Precio</th><th>Stock</th><th></th></tr></thead>
+    <tbody>${list.map((p) => `<tr>
+      <td style="font-family:monospace;color:var(--gray);font-size:.78rem;">${esc(p.code)}</td>
+      <td><b>${esc(p.name)}</b><br><span style="color:#9AA6B0;font-size:.72rem;">${esc(p.category)}</span></td>
+      <td>${money(p.price)}</td>
+      <td>${p.stock || 0}</td>
+      <td style="text-align:right;"><button data-edit="${p.id}" style="border:none;background:none;cursor:pointer;">✏️</button>
+      <button data-del="${p.id}" style="border:none;background:none;cursor:pointer;">🗑️</button></td>
+    </tr>`).join("")}</tbody></table></div>`;
+}
+function bindProductos() {
+  document.getElementById("newProd").onclick = () => openProdModal(null);
+  document.getElementById("qSearch").oninput = (e) => {
+    const q = e.target.value.toLowerCase();
+    document.getElementById("prodTableWrap").innerHTML = productsTable(products.filter((p) => p.name.toLowerCase().includes(q) || p.code.toLowerCase().includes(q)));
+    bindTableActions();
+  };
+  bindTableActions();
+}
+function bindTableActions() {
+  document.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => openProdModal(products.find((p) => p.id === b.dataset.edit))));
+  document.querySelectorAll("[data-del]").forEach((b) => (b.onclick = async () => {
+    const p = products.find((x) => x.id === b.dataset.del);
+    if (!confirm(`¿Eliminar "${p.name}"?`)) return;
+    await supabase.from("products").delete().eq("id", p.id);
+    await logMovement("producto_eliminado", { product_name: p.name, note: `Código ${p.code}` });
+  }));
+}
+function openProdModal(p) {
+  const wrap = document.getElementById("prodModalWrap");
+  wrap.innerHTML = `<div class="modal-bg"><div class="modal">
+    <p class="disp" style="font-size:1.2rem;margin:0 0 14px;">${p ? "Editar producto" : "Nuevo producto"}</p>
+    <label class="label">Código</label><input id="fCode" class="in" style="margin-bottom:10px;" value="${p ? esc(p.code) : ""}" placeholder="Ej: COT-0012" />
+    <label class="label">Nombre</label><input id="fName" class="in" style="margin-bottom:10px;" value="${p ? esc(p.name) : ""}" placeholder="Ej: Globo metalizado corazón" />
+    <label class="label">Categoría</label><input id="fCat" class="in" style="margin-bottom:10px;" value="${p ? esc(p.category) : ""}" placeholder="Ej: Globos" />
+    <div class="grid2" style="margin-bottom:14px;">
+      <div><label class="label">Precio</label><input id="fPrice" type="number" class="in" value="${p ? p.price : ""}" placeholder="0" /></div>
+      <div><label class="label">Stock crítico</label><input id="fCrit" type="number" class="in" value="${p ? p.critical_stock : "5"}" placeholder="5" /></div>
+    </div>
+    <button id="fSave" class="btn btn-blue" style="width:100%;margin-bottom:8px;">Guardar</button>
+    <button id="fCancel" class="btn btn-ghost" style="width:100%;">Cancelar</button>
+  </div></div>`;
+  document.getElementById("fCancel").onclick = () => (wrap.innerHTML = "");
+  document.getElementById("fSave").onclick = async () => {
+    const code = document.getElementById("fCode").value.trim();
+    const name = document.getElementById("fName").value.trim();
+    const category = document.getElementById("fCat").value.trim() || "General";
+    const price = Number(document.getElementById("fPrice").value) || 0;
+    const criticalStock = Number(document.getElementById("fCrit").value) || 0;
+    if (!code || !name) return;
+    if (p) {
+      await supabase.from("products").update({ code, name, category, price, critical_stock: criticalStock }).eq("id", p.id);
+      await logMovement("producto_editado", { product_name: name, note: "Datos actualizados" });
+    } else {
+      await supabase.from("products").insert({ code, name, category, price, critical_stock: criticalStock, stock: 0 });
+      await logMovement("producto_creado", { product_name: name, note: `Código ${code}` });
+    }
+    wrap.innerHTML = "";
+  };
+}
+
+/* ======================================================
+   Stock (venta / reposición manual)
+   ====================================================== */
+function renderStock() {
+  if (products.length === 0) return emptyState("Cargá productos primero en la pestaña Productos.");
+  return `<div class="card" style="padding:0;overflow:hidden;"><table>
+    <thead><tr><th>Producto</th><th>Stock</th><th></th></tr></thead>
+    <tbody>${products.map((p) => {
+      const low = (p.stock || 0) <= p.critical_stock;
+      return `<tr><td><b>${esc(p.name)}</b><br><span style="color:#9AA6B0;font-size:.72rem;font-family:monospace;">${esc(p.code)}</span></td>
+        <td><b style="color:${low ? "var(--red)" : "var(--black)"};">${p.stock || 0}</b>${low ? ' <span style="color:var(--red);font-size:.65rem;font-weight:700;">CRÍTICO</span>' : ""}</td>
+        <td style="text-align:right;white-space:nowrap;">
+          <button data-venta="${p.id}" class="pill" style="background:var(--red-pale);color:var(--red);border:none;cursor:pointer;margin-right:4px;">🔻 Venta</button>
+          <button data-repo="${p.id}" class="pill" style="background:var(--blue-pale);color:var(--blue);border:none;cursor:pointer;">🔺 Reponer</button>
+        </td></tr>`;
+    }).join("")}</tbody></table></div><div id="stockModalWrap"></div>`;
+}
+function bindStock() {
+  document.querySelectorAll("[data-venta]").forEach((b) => (b.onclick = () => openStockModal(products.find((p) => p.id === b.dataset.venta), "venta")));
+  document.querySelectorAll("[data-repo]").forEach((b) => (b.onclick = () => openStockModal(products.find((p) => p.id === b.dataset.repo), "reposicion")));
+}
+function openStockModal(p, type) {
+  const wrap = document.getElementById("stockModalWrap");
+  wrap.innerHTML = `<div class="modal-bg"><div class="modal">
+    <p class="disp" style="font-size:1.1rem;margin:0 0 14px;">${type === "venta" ? "Registrar venta" : "Reponer stock"} · ${esc(p.name)}</p>
+    <label class="label">Cantidad</label><input id="mQty" type="number" class="in" style="margin-bottom:10px;" placeholder="0" />
+    <label class="label">Nota (opcional)</label><input id="mNote" class="in" style="margin-bottom:12px;" placeholder="${type === "venta" ? "Ej: venta mostrador" : "Ej: llegó del depósito"}" />
+    ${type === "reposicion" ? `<p style="font-size:.75rem;color:var(--gray);background:var(--gray-light);border-radius:8px;padding:8px 10px;margin-bottom:12px;">Se genera automáticamente una factura por ${money(p.price)} × cantidad.</p>` : ""}
+    <button id="mConfirm" class="btn ${type === "venta" ? "btn-red" : "btn-blue"}" style="width:100%;margin-bottom:8px;">Confirmar ${type === "venta" ? "venta" : "reposición"}</button>
+    <button id="mCancel" class="btn btn-ghost" style="width:100%;">Cancelar</button>
+  </div></div>`;
+  document.getElementById("mCancel").onclick = () => (wrap.innerHTML = "");
+  document.getElementById("mConfirm").onclick = async () => {
+    const n = Number(document.getElementById("mQty").value);
+    if (!n || n <= 0) return;
+    const note = document.getElementById("mNote").value.trim();
+    const delta = type === "venta" ? -n : n;
+    const resultingStock = Math.max(0, (p.stock || 0) + delta);
+    await supabase.from("products").update({ stock: resultingStock }).eq("id", p.id);
+    await logMovement(type, { product_id: p.id, product_name: p.name, qty: n, note, resulting_stock: resultingStock });
+    if (type === "reposicion") {
+      const number = `AD-${String(invoices.length + 1).padStart(4, "0")}`;
+      await supabase.from("invoices").insert({ number, user_label: me.label, total: p.price * n,
+        items: [{ productId: p.id, name: p.name, code: p.code, qty: n, price: p.price, subtotal: p.price * n }] });
+    }
+    wrap.innerHTML = "";
+  };
+}
+
+/* ======================================================
+   Pedidos (Cotillón o Angel's puede cargar; se completa y genera factura)
+   ====================================================== */
+function renderPedidos() {
+  const pend = pedidos.filter((p) => p.status === "pendiente");
+  const resto = pedidos.filter((p) => p.status !== "pendiente");
+  return `<div style="display:flex;justify-content:flex-end;margin-bottom:14px;">
+    <button id="newPedido" class="btn btn-orange">+ Nuevo pedido</button>
+  </div>
+  <p class="label" style="margin-bottom:8px;">Pendientes (${pend.length})</p>
+  ${pend.length === 0 ? emptyState("No hay pedidos pendientes.") : pend.map(pedidoCard).join("")}
+  ${resto.length > 0 ? `<p class="label" style="margin:20px 0 8px;">Historial de pedidos</p>${resto.map(pedidoCard).join("")}` : ""}
+  <div id="pedidoModalWrap"></div>`;
+}
+function pedidoCard(pe) {
+  const r = roleOf(pe.requested_role);
+  const statusColor = pe.status === "pendiente" ? "var(--orange)" : pe.status === "completado" ? "var(--green)" : "var(--red)";
+  const statusBg = pe.status === "pendiente" ? "var(--orange-pale)" : pe.status === "completado" ? "#ECFDF5" : "var(--red-pale)";
+  return `<div class="card" style="margin-bottom:10px;">
+    <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:8px;">
+      <div>
+        <p style="margin:0;font-size:.8rem;color:var(--gray);">${fmtDate(pe.created_at)} · ${dot(pe.requested_role)}<b>${esc(pe.requested_by)}</b></p>
+        ${pe.note ? `<p style="margin:4px 0 0;font-size:.82rem;">"${esc(pe.note)}"</p>` : ""}
+      </div>
+      <span class="pill" style="background:${statusBg};color:${statusColor};">${pe.status}</span>
+    </div>
+    <div style="border-top:1px solid #F0F1F3;padding-top:8px;">
+      ${(pe.items || []).map((it) => `<div style="display:flex;justify-content:space-between;font-size:.82rem;padding:2px 0;"><span>${esc(it.name)}</span><b>${it.qty} u.</b></div>`).join("")}
+    </div>
+    ${pe.status === "pendiente" ? `
+      <div style="display:flex;gap:8px;margin-top:10px;">
+        <button data-complete="${pe.id}" class="btn btn-blue" style="flex:1;padding:8px;font-size:.8rem;">✅ Completar (repone stock + factura)</button>
+        <button data-cancel="${pe.id}" class="btn btn-ghost" style="padding:8px 12px;font-size:.8rem;">Cancelar</button>
+      </div>` : pe.status === "completado" ? `<p style="margin:8px 0 0;font-size:.72rem;color:#9AA6B0;">Completado por ${esc(pe.completed_by)} el ${fmtDate(pe.completed_at)}</p>` : ""}
+  </div>`;
+}
+function bindPedidos() {
+  document.getElementById("newPedido").onclick = openPedidoModal;
+  document.querySelectorAll("[data-complete]").forEach((b) => (b.onclick = () => completePedido(pedidos.find((p) => p.id === b.dataset.complete))));
+  document.querySelectorAll("[data-cancel]").forEach((b) => (b.onclick = async () => {
+    const pe = pedidos.find((p) => p.id === b.dataset.cancel);
+    await supabase.from("pedidos").update({ status: "cancelado" }).eq("id", pe.id);
+  }));
+}
+function openPedidoModal() {
+  const wrap = document.getElementById("pedidoModalWrap");
+  let rows = [{ productId: "", qty: 1 }];
+  function renderRows() {
+    return rows.map((row, i) => `
+      <div style="display:flex;gap:6px;margin-bottom:8px;" data-row="${i}">
+        <select class="in row-prod" style="flex:2;">
+          <option value="">Elegir producto...</option>
+          ${products.map((p) => `<option value="${p.id}" ${row.productId === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}
+        </select>
+        <input type="number" class="in row-qty" style="width:70px;" value="${row.qty}" min="1" />
+        ${rows.length > 1 ? `<button data-rmrow="${i}" class="btn btn-ghost" style="padding:8px 10px;">✕</button>` : ""}
+      </div>`).join("");
+  }
+  function paint() {
+    wrap.innerHTML = `<div class="modal-bg"><div class="modal">
+      <p class="disp" style="font-size:1.2rem;margin:0 0 14px;">Nuevo pedido</p>
+      <div id="rowsWrap">${renderRows()}</div>
+      <button id="addRow" class="btn btn-ghost" style="width:100%;margin-bottom:12px;font-size:.8rem;">+ Agregar otro producto</button>
+      <label class="label">Nota (opcional)</label>
+      <textarea id="peNote" class="in" style="margin-bottom:14px;min-height:60px;" placeholder="Ej: para reponer antes del fin de semana"></textarea>
+      <button id="peSave" class="btn btn-orange" style="width:100%;margin-bottom:8px;">Enviar pedido</button>
+      <button id="peCancel" class="btn btn-ghost" style="width:100%;">Cancelar</button>
+    </div></div>`;
+    document.querySelectorAll(".row-prod").forEach((el, i) => (el.onchange = (e) => (rows[i].productId = e.target.value)));
+    document.querySelectorAll(".row-qty").forEach((el, i) => (el.oninput = (e) => (rows[i].qty = Number(e.target.value) || 1)));
+    document.querySelectorAll("[data-rmrow]").forEach((b) => (b.onclick = () => { rows.splice(Number(b.dataset.rmrow), 1); paint(); }));
+    document.getElementById("addRow").onclick = () => { rows.push({ productId: "", qty: 1 }); paint(); };
+    document.getElementById("peCancel").onclick = () => (wrap.innerHTML = "");
+    document.getElementById("peSave").onclick = async () => {
+      const items = rows.filter((r) => r.productId).map((r) => {
+        const p = products.find((x) => x.id === r.productId);
+        return { product_id: p.id, name: p.name, qty: r.qty };
+      });
+      if (items.length === 0) return;
+      const note = document.getElementById("peNote").value.trim();
+      await supabase.from("pedidos").insert({ requested_by: me.label, requested_role: me.role, items, note, status: "pendiente" });
+      await logMovement("pedido_creado", { note: `${items.length} producto(s): ${items.map((i) => i.name).join(", ")}` });
+      wrap.innerHTML = "";
+    };
+  }
+  paint();
+}
+async function completePedido(pe) {
+  for (const it of pe.items || []) {
+    const p = products.find((x) => x.id === it.product_id);
+    if (!p) continue;
+    const resultingStock = (p.stock || 0) + it.qty;
+    await supabase.from("products").update({ stock: resultingStock }).eq("id", p.id);
+    await logMovement("reposicion", { product_id: p.id, product_name: p.name, qty: it.qty, note: `Pedido de ${pe.requested_by}`, resulting_stock: resultingStock });
+  }
+  const itemsWithPrice = (pe.items || []).map((it) => {
+    const p = products.find((x) => x.id === it.product_id);
+    const price = p ? p.price : 0;
+    return { productId: it.product_id, name: it.name, code: p?.code, qty: it.qty, price, subtotal: price * it.qty };
+  });
+  const total = itemsWithPrice.reduce((s, it) => s + it.subtotal, 0);
+  const number = `AD-${String(invoices.length + 1).padStart(4, "0")}`;
+  await supabase.from("invoices").insert({ number, user_label: me.label, total, items: itemsWithPrice });
+  await supabase.from("pedidos").update({ status: "completado", completed_at: new Date().toISOString(), completed_by: me.label }).eq("id", pe.id);
+  await logMovement("pedido_completado", { note: `Pedido de ${pe.requested_by} completado` });
+}
+
+/* ======================================================
+   Facturas
+   ====================================================== */
+function renderFacturas() {
+  if (invoices.length === 0) return emptyState("Las facturas se generan solas al reponer stock o completar pedidos.");
+  return `<div style="display:flex;flex-direction:column;gap:8px;">${invoices.map((inv) => `
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
+      <div><p style="margin:0;font-weight:700;font-size:.9rem;">${esc(inv.number)}</p>
+        <p style="margin:2px 0 0;font-size:.72rem;color:#9AA6B0;">${fmtDate(inv.created_at)} · ${esc(inv.user_label)}</p></div>
+      <div style="display:flex;align-items:center;gap:10px;">
+        <p class="disp" style="font-size:1.2rem;color:var(--blue);margin:0;">${money(inv.total)}</p>
+        <button data-inv="${inv.id}" style="border:none;background:none;cursor:pointer;">🧾</button>
+      </div>
+    </div>`).join("")}</div><div id="invModalWrap"></div>`;
+}
+function bindFacturas() { document.querySelectorAll("[data-inv]").forEach((b) => (b.onclick = () => openInvoiceModal(invoices.find((i) => i.id === b.dataset.inv)))); }
+function openInvoiceModal(inv) {
+  const wrap = document.getElementById("invModalWrap");
+  wrap.innerHTML = `<div class="modal-bg"><div class="modal">
+    <p class="disp" style="font-size:1.2rem;margin:0 0 4px;">Factura ${esc(inv.number)}</p>
+    <p style="font-size:.75rem;color:#9AA6B0;margin:0 0 12px;">${fmtDate(inv.created_at)} · Generada por ${esc(inv.user_label)}</p>
+    <div class="card" style="padding:0;margin-bottom:12px;">${(inv.items||[]).map((it) => `
+      <div style="display:flex;justify-content:space-between;padding:10px 12px;border-bottom:1px solid #F5F6F7;">
+        <div><b>${esc(it.name)}</b><br><span style="font-size:.72rem;color:#9AA6B0;">${esc(it.code||"")} · ${it.qty} × ${money(it.price)}</span></div>
+        <b>${money(it.subtotal)}</b></div>`).join("")}</div>
+    <div style="display:flex;justify-content:space-between;margin-bottom:14px;"><b>Total</b><span class="disp" style="font-size:1.3rem;color:var(--blue);">${money(inv.total)}</span></div>
+    <button onclick="window.print()" class="btn btn-black" style="width:100%;margin-bottom:8px;">🖨️ Imprimir / Guardar PDF</button>
+    <button id="invCancel" class="btn btn-ghost" style="width:100%;">Cerrar</button>
+  </div></div>`;
+  document.getElementById("invCancel").onclick = () => (wrap.innerHTML = "");
+}
+
+/* ======================================================
+   Notas
+   ====================================================== */
+function renderNotas() {
+  return `<div class="card" style="margin-bottom:16px;">
+    <label class="label">Producto (opcional)</label>
+    <select id="notaProd" class="in" style="margin-bottom:10px;"><option value="">Nota general</option>
+      ${products.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select>
+    <textarea id="notaText" class="in" style="min-height:70px;margin-bottom:10px;" placeholder="Escribí una nota para el otro equipo..."></textarea>
+    <button id="notaSave" class="btn ${me.role === "cotillon" ? "btn-orange" : "btn-blue"}" style="width:100%;">Publicar nota</button>
+  </div>
+  ${notas.length === 0 ? emptyState("Todavía no hay notas.") : notas.map((n) => `
+    <div class="card" style="margin-bottom:8px;">
+      <p style="margin:0 0 4px;font-size:.78rem;color:var(--gray);">${dot(n.user_role)}<b>${esc(n.user_label)}</b> · ${fmtDate(n.created_at)}${n.product_name ? ` · <span style="color:#9AA6B0;">sobre ${esc(n.product_name)}</span>` : ""}</p>
+      <p style="margin:0;font-size:.88rem;">${esc(n.text)}</p>
+    </div>`).join("")}`;
+}
+function bindNotas() {
+  document.getElementById("notaSave").onclick = async () => {
+    const text = document.getElementById("notaText").value.trim();
+    if (!text) return;
+    const productId = document.getElementById("notaProd").value;
+    const product = products.find((p) => p.id === productId);
+    await supabase.from("notas").insert({ user_label: me.label, user_role: me.role, product_id: productId || null, product_name: product?.name || null, text });
+    await logMovement("nota", { product_name: product?.name, note: text.slice(0, 60) });
+  };
+}
+
+/* ======================================================
+   Historial
+   ====================================================== */
+function renderHistorial() {
+  if (movements.length === 0) return emptyState("Todavía no hay actividad registrada.");
+  return `<div class="card" style="padding:0;">${movements.map(movementRow).join("")}</div>`;
+}
+
+init();
+</script>
+</body>
+</html>
