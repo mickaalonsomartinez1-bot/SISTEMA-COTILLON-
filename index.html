@@ -50,6 +50,8 @@ tr:last-child td{border-bottom:none;}
 
 <script type="module">
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
+import html2canvas from 'https://esm.sh/html2canvas@1.4.1';
+import { jsPDF } from 'https://esm.sh/jspdf@2.5.1';
 
 /* ======================================================
    1) CONFIGURACIÓN — pegar acá los datos del proyecto NUEVO de Supabase
@@ -91,10 +93,14 @@ async function init() {
   if (session) { setMe(); await loadAll(); subscribeRealtime(); }
   render();
 }
+const ADMIN_EMAIL = "angels@interno.com";
+const CATEGORIES = ["Cortantes", "Vinchas", "Topper", "Cotillón"];
 function setMe() {
   me = {
     label: session.user.user_metadata?.label || session.user.email,
     role: session.user.user_metadata?.role === "cotillon" ? "cotillon" : "angels",
+    email: session.user.email,
+    isAdmin: session.user.email === ADMIN_EMAIL,
   };
 }
 supabase.auth.onAuthStateChange((_e, s) => {
@@ -163,44 +169,55 @@ function renderLogin() {
     login(document.getElementById("loginEmail").value.trim(), document.getElementById("loginPass").value, document.getElementById("loginErr"));
 }
 
+function notasReadKey() { return `notas_read_${session.user.id}`; }
+function unreadNotasCount() {
+  const lastRead = localStorage.getItem(notasReadKey()) || "1970-01-01";
+  return notas.filter((n) => n.user_role !== me.role && new Date(n.created_at) > new Date(lastRead)).length;
+}
+function markNotasRead() { localStorage.setItem(notasReadKey(), new Date().toISOString()); }
+
 function renderShell() {
   const r = roleOf(me.role);
+  const unread = unreadNotasCount();
   app.innerHTML = `
     <div style="height:6px;border-radius:6px;margin-bottom:14px;background:linear-gradient(90deg,#1B4FCC,#3B82F6,#22D3EE,#FACC15,#F97316);"></div>
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:0 0 14px;">
-      <div style="display:flex;align-items:center;gap:10px;">
-        <img src="${LOGO_ANGELS}" style="height:34px;width:auto;" />
-        <span style="color:var(--gray-border);font-size:1.2rem;">×</span>
-        <img src="${LOGO_COTILLON}" style="height:34px;width:auto;" />
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:0 0 14px;flex-wrap:wrap;gap:10px;">
+      <div style="display:flex;align-items:center;gap:14px;">
+        <img src="${LOGO_ANGELS}" style="height:56px;width:auto;" />
+        <span style="color:var(--gray-border);font-size:1.4rem;">×</span>
+        <img src="${LOGO_COTILLON}" style="height:56px;width:auto;" />
       </div>
-      <button id="logoutBtn" class="pill" style="background:${r.pale};color:${r.color};border:none;cursor:pointer;display:flex;align-items:center;">${avatar(me.role,20)}${esc(me.label)} · Salir</button>
+      <button id="logoutBtn" class="pill" style="background:${r.pale};color:${r.color};border:none;cursor:pointer;display:flex;align-items:center;">${avatar(me.role,26)}${esc(me.label)} · Salir</button>
     </div>
     <div style="margin:-8px 0 14px;">
       <p class="disp" style="font-size:1.35rem;margin:0;">SISTEMA <span style="color:var(--blue);">ANGEL'S</span> <span style="color:var(--orange);">× COTILLÓN</span></p>
       <p style="font-size:.65rem;color:var(--gray);text-transform:uppercase;letter-spacing:.08em;margin:2px 0 0;">Sincronizado en vivo</p>
     </div>
     <div style="display:flex;gap:2px;border-bottom:1px solid var(--gray-border);overflow-x:auto;margin-bottom:16px;">
-      ${tabBtn("dashboard","Resumen")}${tabBtn("productos","Productos")}${tabBtn("stock","Stock")}${tabBtn("pedidos","Pedidos")}${tabBtn("facturas","Facturas")}${tabBtn("notas","Notas")}${tabBtn("historial","Historial")}
+      ${tabBtn("dashboard","Resumen")}${tabBtn("productos","Productos")}${tabBtn("stock","Stock")}${tabBtn("pedidos","Pedidos")}${tabBtn("facturas","Facturas")}${tabBtn("notas","Mensajes",unread)}${tabBtn("historial","Historial")}
     </div>
     <div id="tabContent"></div>`;
   document.getElementById("logoutBtn").onclick = logout;
   document.querySelectorAll("[data-tab]").forEach((b) => (b.onclick = () => { tab = b.dataset.tab; render(); }));
 
   const c = document.getElementById("tabContent");
-  if (tab === "dashboard") c.innerHTML = renderDashboard();
+  if (tab === "dashboard") { c.innerHTML = renderDashboard(); bindHistorial(); }
   if (tab === "productos") { c.innerHTML = renderProductos(); bindProductos(); }
   if (tab === "stock") { c.innerHTML = renderStock(); bindStock(); }
   if (tab === "pedidos") { c.innerHTML = renderPedidos(); bindPedidos(); }
   if (tab === "facturas") { c.innerHTML = renderFacturas(); bindFacturas(); }
-  if (tab === "notas") { c.innerHTML = renderNotas(); bindNotas(); }
-  if (tab === "historial") c.innerHTML = renderHistorial();
+  if (tab === "notas") { c.innerHTML = renderNotas(); bindNotas(); markNotasRead(); }
+  if (tab === "historial") { c.innerHTML = renderHistorial(); bindHistorial(); }
 
   const goStock = document.getElementById("goStock");
   if (goStock) goStock.onclick = () => { tab = "stock"; render(); };
   const goPedidos = document.getElementById("goPedidos");
   if (goPedidos) goPedidos.onclick = () => { tab = "pedidos"; render(); };
 }
-function tabBtn(id, label) { return `<button class="tab ${tab === id ? "active" : ""}" data-tab="${id}">${label}</button>`; }
+function tabBtn(id, label, badge) {
+  const badgeHtml = badge ? `<span style="background:var(--red);color:#fff;border-radius:999px;padding:1px 6px;font-size:.62rem;margin-left:5px;">${badge}</span>` : "";
+  return `<button class="tab ${tab === id ? "active" : ""}" data-tab="${id}">${label}${badgeHtml}</button>`;
+}
 function emptyState(text) { return `<div style="border:1.5px dashed var(--gray-border);border-radius:12px;padding:28px;text-align:center;color:#9AA6B0;font-size:.85rem;">${text}</div>`; }
 
 /* ======================================================
@@ -294,7 +311,9 @@ function movementRow(m) {
     <div style="flex:1;">
       <p style="margin:0;font-size:.85rem;"><b>${meta[1]}</b>${m.product_name ? " · " + esc(m.product_name) : ""}${typeof m.qty === "number" ? " · " + m.qty + " u." : ""}</p>
       <p style="margin:2px 0 0;font-size:.72rem;color:#9AA6B0;display:flex;align-items:center;gap:2px;">${fmtDate(m.created_at)} · ${avatar(m.user_role,14)}<b>${esc(m.user_label)}</b>${m.note ? " · " + esc(m.note) : ""}</p>
-    </div></div>`;
+    </div>
+    ${me.isAdmin ? `<button data-delmov="${m.id}" title="Borrar" style="border:none;background:none;color:#D1D5DB;cursor:pointer;">✕</button>` : ""}
+    </div>`;
 }
 
 /* ======================================================
@@ -345,7 +364,10 @@ function openProdModal(p) {
     <p class="disp" style="font-size:1.2rem;margin:0 0 14px;">${p ? "Editar producto" : "Nuevo producto"}</p>
     <label class="label">Código</label><input id="fCode" class="in" style="margin-bottom:10px;" value="${p ? esc(p.code) : ""}" placeholder="Ej: COT-0012" />
     <label class="label">Nombre</label><input id="fName" class="in" style="margin-bottom:10px;" value="${p ? esc(p.name) : ""}" placeholder="Ej: Globo metalizado corazón" />
-    <label class="label">Categoría</label><input id="fCat" class="in" style="margin-bottom:10px;" value="${p ? esc(p.category) : ""}" placeholder="Ej: Globos" />
+    <label class="label">Categoría</label>
+    <select id="fCat" class="in" style="margin-bottom:10px;">
+      ${CATEGORIES.map((c) => `<option value="${c}" ${p && p.category === c ? "selected" : ""}>${c}</option>`).join("")}
+    </select>
     <div class="grid2" style="margin-bottom:14px;">
       <div><label class="label">Precio</label><input id="fPrice" type="number" class="in" value="${p ? p.price : ""}" placeholder="0" /></div>
       <div><label class="label">Stock crítico</label><input id="fCrit" type="number" class="in" value="${p ? p.critical_stock : "5"}" placeholder="5" /></div>
@@ -375,21 +397,32 @@ function openProdModal(p) {
 /* ======================================================
    Stock (venta / reposición manual)
    ====================================================== */
+let stockCategory = "Todas";
 function renderStock() {
   if (products.length === 0) return emptyState("Cargá productos primero en la pestaña Productos.");
-  return `<div class="card" style="padding:0;overflow:hidden;"><table>
-    <thead><tr><th>Producto</th><th>Stock</th><th></th></tr></thead>
-    <tbody>${products.map((p) => {
+  const cats = ["Todas", ...CATEGORIES];
+  const list = stockCategory === "Todas" ? products : products.filter((p) => p.category === stockCategory);
+  const canVenta = me.role === "cotillon" || me.isAdmin;
+  const canRepo = me.role === "angels" || me.isAdmin;
+  return `
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">
+      ${cats.map((c) => `<button data-cat="${esc(c)}" class="pill" style="border:1.5px solid ${stockCategory === c ? "var(--blue)" : "var(--gray-border)"};background:${stockCategory === c ? "var(--blue-pale)" : "#fff"};color:${stockCategory === c ? "var(--blue)" : "var(--gray)"};cursor:pointer;">${esc(c)}</button>`).join("")}
+    </div>
+    <div class="card" style="padding:0;overflow:hidden;"><table>
+    <thead><tr><th>Producto</th><th>Categoría</th><th>Stock</th><th></th></tr></thead>
+    <tbody>${list.map((p) => {
       const low = (p.stock || 0) <= p.critical_stock;
       return `<tr><td><b>${esc(p.name)}</b><br><span style="color:#9AA6B0;font-size:.72rem;font-family:monospace;">${esc(p.code)}</span></td>
+        <td style="color:var(--gray);font-size:.78rem;">${esc(p.category)}</td>
         <td><b style="color:${low ? "var(--red)" : "var(--black)"};">${p.stock || 0}</b>${low ? ' <span style="color:var(--red);font-size:.65rem;font-weight:700;">CRÍTICO</span>' : ""}</td>
         <td style="text-align:right;white-space:nowrap;">
-          <button data-venta="${p.id}" class="pill" style="background:var(--red-pale);color:var(--red);border:none;cursor:pointer;margin-right:4px;">🔻 Venta</button>
-          <button data-repo="${p.id}" class="pill" style="background:var(--blue-pale);color:var(--blue);border:none;cursor:pointer;">🔺 Reponer</button>
+          ${canVenta ? `<button data-venta="${p.id}" class="pill" style="background:var(--red-pale);color:var(--red);border:none;cursor:pointer;margin-right:4px;">🔻 Venta</button>` : ""}
+          ${canRepo ? `<button data-repo="${p.id}" class="pill" style="background:var(--blue-pale);color:var(--blue);border:none;cursor:pointer;">🔺 Reponer</button>` : ""}
         </td></tr>`;
     }).join("")}</tbody></table></div><div id="stockModalWrap"></div>`;
 }
 function bindStock() {
+  document.querySelectorAll("[data-cat]").forEach((b) => (b.onclick = () => { stockCategory = b.dataset.cat; render(); }));
   document.querySelectorAll("[data-venta]").forEach((b) => (b.onclick = () => openStockModal(products.find((p) => p.id === b.dataset.venta), "venta")));
   document.querySelectorAll("[data-repo]").forEach((b) => (b.onclick = () => openStockModal(products.find((p) => p.id === b.dataset.repo), "reposicion")));
 }
@@ -554,6 +587,7 @@ function openInvoiceModal(inv) {
   const entrega = d.toLocaleDateString("es-AR");
 
   wrap.innerHTML = `<div class="modal-bg"><div class="modal" style="max-width:460px;padding:0;overflow:hidden;">
+    <div id="invoiceCapture" style="background:#fff;">
     <div id="printable-invoice" style="padding:28px 26px 0;">
 
       <p style="text-align:center;font-size:.7rem;color:#9AA6B0;margin:0 0 18px;">Factura - Angel's Design</p>
@@ -621,13 +655,34 @@ function openInvoiceModal(inv) {
       ALIAS PARA TRANSFERENCIA: <b>angel.alonso.3d</b>
     </div>
     <p style="text-align:center;font-size:.72rem;color:#9AA6B0;padding:12px 20px 0;margin:0;">Gracias por elegirnos!</p>
+    </div>
 
     <div style="display:flex;gap:8px;padding:16px 26px 24px;">
-      <button onclick="window.print()" class="btn btn-black" style="flex:1;">🖨️ Imprimir / Guardar PDF</button>
+      <button id="invDownload" class="btn btn-blue" style="flex:1;">⬇️ Descargar PDF</button>
+      <button onclick="window.print()" class="btn btn-black" style="flex:1;">🖨️ Imprimir</button>
       <button id="invCancel" class="btn btn-ghost">Cerrar</button>
     </div>
   </div></div>`;
   document.getElementById("invCancel").onclick = () => (wrap.innerHTML = "");
+  document.getElementById("invDownload").onclick = async (e) => {
+    const btn = e.currentTarget;
+    const originalText = btn.textContent;
+    btn.textContent = "Generando...";
+    btn.disabled = true;
+    try {
+      const el = document.getElementById("invoiceCapture");
+      const canvas = await html2canvas(el, { scale: 2, backgroundColor: "#ffffff" });
+      const imgData = canvas.toDataURL("image/png");
+      const pdf = new jsPDF({ unit: "px", format: [canvas.width, canvas.height] });
+      pdf.addImage(imgData, "PNG", 0, 0, canvas.width, canvas.height);
+      pdf.save(`factura-${inv.number}.pdf`);
+    } catch (err) {
+      alert("No se pudo generar el PDF. Probá con 'Imprimir' como alternativa.");
+    } finally {
+      btn.textContent = originalText;
+      btn.disabled = false;
+    }
+  };
 }
 
 /* ======================================================
@@ -638,13 +693,16 @@ function renderNotas() {
     <label class="label">Producto (opcional)</label>
     <select id="notaProd" class="in" style="margin-bottom:10px;"><option value="">Nota general</option>
       ${products.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select>
-    <textarea id="notaText" class="in" style="min-height:70px;margin-bottom:10px;" placeholder="Escribí una nota para el otro equipo..."></textarea>
-    <button id="notaSave" class="btn ${me.role === "cotillon" ? "btn-orange" : "btn-blue"}" style="width:100%;">Publicar nota</button>
+    <textarea id="notaText" class="in" style="min-height:70px;margin-bottom:10px;" placeholder="Escribí un mensaje interno para el otro equipo..."></textarea>
+    <button id="notaSave" class="btn ${me.role === "cotillon" ? "btn-orange" : "btn-blue"}" style="width:100%;">Enviar mensaje</button>
   </div>
-  ${notas.length === 0 ? emptyState("Todavía no hay notas.") : notas.map((n) => `
-    <div class="card" style="margin-bottom:8px;">
-      <p style="margin:0 0 4px;font-size:.78rem;color:var(--gray);display:flex;align-items:center;gap:2px;">${avatar(n.user_role,16)}<b>${esc(n.user_label)}</b> · ${fmtDate(n.created_at)}${n.product_name ? ` · <span style="color:#9AA6B0;">sobre ${esc(n.product_name)}</span>` : ""}</p>
-      <p style="margin:0;font-size:.88rem;">${esc(n.text)}</p>
+  ${notas.length === 0 ? emptyState("Todavía no hay mensajes.") : notas.map((n) => `
+    <div class="card" style="margin-bottom:8px;display:flex;justify-content:space-between;gap:10px;">
+      <div style="flex:1;">
+        <p style="margin:0 0 4px;font-size:.78rem;color:var(--gray);display:flex;align-items:center;gap:2px;">${avatar(n.user_role,16)}<b>${esc(n.user_label)}</b> · ${fmtDate(n.created_at)}${n.product_name ? ` · <span style="color:#9AA6B0;">sobre ${esc(n.product_name)}</span>` : ""}</p>
+        <p style="margin:0;font-size:.88rem;">${esc(n.text)}</p>
+      </div>
+      ${me.isAdmin ? `<button data-delnota="${n.id}" title="Borrar" style="border:none;background:none;color:#D1D5DB;cursor:pointer;">✕</button>` : ""}
     </div>`).join("")}`;
 }
 function bindNotas() {
@@ -656,6 +714,10 @@ function bindNotas() {
     await supabase.from("notas").insert({ user_label: me.label, user_role: me.role, product_id: productId || null, product_name: product?.name || null, text });
     await logMovement("nota", { product_name: product?.name, note: text.slice(0, 60) });
   };
+  document.querySelectorAll("[data-delnota]").forEach((b) => (b.onclick = async () => {
+    if (!confirm("¿Borrar este mensaje?")) return;
+    await supabase.from("notas").delete().eq("id", b.dataset.delnota);
+  }));
 }
 
 /* ======================================================
@@ -664,6 +726,12 @@ function bindNotas() {
 function renderHistorial() {
   if (movements.length === 0) return emptyState("Todavía no hay actividad registrada.");
   return `<div class="card" style="padding:0;">${movements.map(movementRow).join("")}</div>`;
+}
+function bindHistorial() {
+  document.querySelectorAll("[data-delmov]").forEach((b) => (b.onclick = async () => {
+    if (!confirm("¿Borrar esta entrada del historial? Esto no revierte el stock, solo borra el registro.")) return;
+    await supabase.from("movements").delete().eq("id", b.dataset.delmov);
+  }));
 }
 
 init();
