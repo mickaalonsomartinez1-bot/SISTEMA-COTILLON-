@@ -50,7 +50,6 @@ tr:last-child td{border-bottom:none;}
 
 <script type="module">
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-import html2canvas from 'https://esm.sh/html2canvas@1.4.1';
 import { jsPDF } from 'https://esm.sh/jspdf@2.5.1';
 
 /* ======================================================
@@ -478,7 +477,10 @@ function pedidoCard(pe) {
         <p style="margin:0;font-size:.8rem;color:var(--gray);display:flex;align-items:center;gap:2px;">${fmtDate(pe.created_at)} · ${avatar(pe.requested_role,16)}<b>${esc(pe.requested_by)}</b></p>
         ${pe.note ? `<p style="margin:4px 0 0;font-size:.82rem;">"${esc(pe.note)}"</p>` : ""}
       </div>
-      <span class="pill" style="background:${statusBg};color:${statusColor};">${pe.status}</span>
+      <div style="display:flex;align-items:center;gap:6px;">
+        <span class="pill" style="background:${statusBg};color:${statusColor};">${pe.status}</span>
+        ${me.isAdmin ? `<button data-delped="${pe.id}" title="Borrar pedido" style="border:none;background:none;color:#D1D5DB;cursor:pointer;">✕</button>` : ""}
+      </div>
     </div>
     <div style="border-top:1px solid #F0F1F3;padding-top:8px;">
       ${(pe.items || []).map((it) => `<div style="display:flex;justify-content:space-between;font-size:.82rem;padding:2px 0;"><span>${esc(it.name)}</span><b>${it.qty} u.</b></div>`).join("")}
@@ -497,6 +499,10 @@ function bindPedidos() {
   document.querySelectorAll("[data-cancel]").forEach((b) => (b.onclick = async () => {
     const pe = pedidos.find((p) => p.id === b.dataset.cancel);
     await supabase.from("pedidos").update({ status: "cancelado" }).eq("id", pe.id);
+  }));
+  document.querySelectorAll("[data-delped]").forEach((b) => (b.onclick = async () => {
+    if (!confirm("¿Borrar este pedido definitivamente?")) return;
+    await supabase.from("pedidos").delete().eq("id", b.dataset.delped);
   }));
 }
 function openPedidoModal() {
@@ -567,17 +573,33 @@ async function completePedido(pe) {
    ====================================================== */
 function renderFacturas() {
   if (invoices.length === 0) return emptyState("Las facturas se generan solas al reponer stock o completar pedidos.");
-  return `<div style="display:flex;flex-direction:column;gap:8px;">${invoices.map((inv) => `
-    <div class="card" style="display:flex;justify-content:space-between;align-items:center;">
+  return `<div style="display:flex;flex-direction:column;gap:8px;">${invoices.map((inv) => {
+    const paid = inv.payment_status === "pagado";
+    return `
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
       <div><p style="margin:0;font-weight:700;font-size:.9rem;">${esc(inv.number)}</p>
         <p style="margin:2px 0 0;font-size:.72rem;color:#9AA6B0;">${fmtDate(inv.created_at)} · ${esc(inv.user_label)}</p></div>
       <div style="display:flex;align-items:center;gap:10px;">
+        <button data-toggle-pay="${inv.id}" class="pill" style="border:none;cursor:pointer;background:${paid ? "#ECFDF5" : "var(--orange-pale)"};color:${paid ? "var(--green)" : "var(--orange)"};">${paid ? "✅ Pagado" : "⏳ Pendiente"}</button>
         <p class="disp" style="font-size:1.2rem;color:var(--blue);margin:0;">${money(inv.total)}</p>
         <button data-inv="${inv.id}" style="border:none;background:none;cursor:pointer;">🧾</button>
+        ${me.isAdmin ? `<button data-delinv="${inv.id}" title="Borrar factura" style="border:none;background:none;color:#D1D5DB;cursor:pointer;">✕</button>` : ""}
       </div>
-    </div>`).join("")}</div><div id="invModalWrap"></div>`;
+    </div>`;
+  }).join("")}</div><div id="invModalWrap"></div>`;
 }
-function bindFacturas() { document.querySelectorAll("[data-inv]").forEach((b) => (b.onclick = () => openInvoiceModal(invoices.find((i) => i.id === b.dataset.inv)))); }
+function bindFacturas() {
+  document.querySelectorAll("[data-inv]").forEach((b) => (b.onclick = () => openInvoiceModal(invoices.find((i) => i.id === b.dataset.inv))));
+  document.querySelectorAll("[data-toggle-pay]").forEach((b) => (b.onclick = async () => {
+    const inv = invoices.find((i) => i.id === b.dataset.togglePay);
+    const next = inv.payment_status === "pagado" ? "pendiente" : "pagado";
+    await supabase.from("invoices").update({ payment_status: next }).eq("id", inv.id);
+  }));
+  document.querySelectorAll("[data-delinv]").forEach((b) => (b.onclick = async () => {
+    if (!confirm("¿Borrar esta factura definitivamente?")) return;
+    await supabase.from("invoices").delete().eq("id", b.dataset.delinv);
+  }));
+}
 function openInvoiceModal(inv) {
   const wrap = document.getElementById("invModalWrap");
   const d = new Date(inv.created_at);
@@ -613,7 +635,7 @@ function openInvoiceModal(inv) {
 
       <div style="background:#F7F7F5;border-radius:10px;padding:14px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:16px;">
         <div><p style="font-size:.6rem;font-weight:700;letter-spacing:.06em;color:#9AA6B0;margin:0 0 3px;">PARA</p><p style="font-size:.82rem;font-weight:700;margin:0;">Cotillón Arcoíris</p></div>
-        <div><p style="font-size:.6rem;font-weight:700;letter-spacing:.06em;color:#9AA6B0;margin:0 0 3px;">ESTADO</p><p style="font-size:.82rem;font-weight:700;margin:0;">Completado</p></div>
+        <div><p style="font-size:.6rem;font-weight:700;letter-spacing:.06em;color:#9AA6B0;margin:0 0 3px;">ESTADO</p><p style="font-size:.82rem;font-weight:700;margin:0;color:${inv.payment_status === "pagado" ? "var(--green)" : "var(--orange)"};">${inv.payment_status === "pagado" ? "Pagado" : "Pendiente"}</p></div>
         <div><p style="font-size:.6rem;font-weight:700;letter-spacing:.06em;color:#9AA6B0;margin:0 0 3px;">ENTREGA</p><p style="font-size:.82rem;font-weight:700;margin:0;">${entrega}</p></div>
       </div>
 
@@ -664,25 +686,119 @@ function openInvoiceModal(inv) {
     </div>
   </div></div>`;
   document.getElementById("invCancel").onclick = () => (wrap.innerHTML = "");
-  document.getElementById("invDownload").onclick = async (e) => {
-    const btn = e.currentTarget;
-    const originalText = btn.textContent;
-    btn.textContent = "Generando...";
-    btn.disabled = true;
+  document.getElementById("invDownload").onclick = () => {
     try {
-      const el = document.getElementById("invoiceCapture");
-      const canvas = await html2canvas(el, { scale: 2, backgroundColor: "#ffffff" });
-      const imgData = canvas.toDataURL("image/png");
-      const pdf = new jsPDF({ unit: "px", format: [canvas.width, canvas.height] });
-      pdf.addImage(imgData, "PNG", 0, 0, canvas.width, canvas.height);
-      pdf.save(`factura-${inv.number}.pdf`);
+      generateInvoicePDF(inv);
     } catch (err) {
       alert("No se pudo generar el PDF. Probá con 'Imprimir' como alternativa.");
-    } finally {
-      btn.textContent = originalText;
-      btn.disabled = false;
+      console.error(err);
     }
   };
+}
+
+function generateInvoicePDF(inv) {
+  const d = new Date(inv.created_at);
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const yy = String(d.getFullYear()).slice(-2);
+  const entrega = d.toLocaleDateString("es-AR");
+  const items = inv.items || [];
+  const pageW = 380;
+  const pageH = 470 + items.length * 20;
+  const pdf = new jsPDF({ unit: "pt", format: [pageW, pageH] });
+  const mx = 26;
+  let y = 34;
+
+  try { pdf.addImage(LOGO_ANGELS, "PNG", mx, y - 18, 85, 30); } catch (e) {}
+
+  pdf.setFontSize(7);
+  pdf.setTextColor(150, 150, 150);
+  pdf.text("FECHA", pageW - mx, y - 16, { align: "right" });
+  pdf.setFontSize(9);
+  pdf.setTextColor(20, 20, 20);
+  const boxW = 18, boxH = 14, gap = 4;
+  let bx = pageW - mx - (boxW * 3 + gap * 2);
+  [dd, mm, yy].forEach((val) => {
+    pdf.rect(bx, y - 10, boxW, boxH);
+    pdf.text(val, bx + boxW / 2, y, { align: "center" });
+    bx += boxW + gap;
+  });
+
+  y += 46;
+  pdf.setFontSize(22);
+  pdf.setTextColor(10, 10, 10);
+  pdf.text("Factura", pageW - mx, y, { align: "right" });
+  pdf.setFontSize(10);
+  pdf.setTextColor(201, 151, 59);
+  pdf.text(`N° ${inv.number}`, pageW - mx, y + 14, { align: "right" });
+
+  y += 34;
+  pdf.setFillColor(247, 247, 245);
+  pdf.roundedRect(mx, y, pageW - mx * 2, 46, 4, 4, "F");
+  const colW = (pageW - mx * 2) / 3;
+  [["PARA", "Cotillón Arcoíris"], ["ESTADO", inv.payment_status === "pagado" ? "Pagado" : "Pendiente"], ["ENTREGA", entrega]].forEach((info, i) => {
+    const cx = mx + 12 + i * colW;
+    pdf.setFontSize(6.5); pdf.setTextColor(150, 150, 150);
+    pdf.text(info[0], cx, y + 16);
+    pdf.setFontSize(9); pdf.setTextColor(20, 20, 20);
+    pdf.text(info[1], cx, y + 30);
+  });
+
+  y += 62;
+  pdf.setFillColor(10, 10, 10);
+  pdf.rect(mx, y, pageW - mx * 2, 20, "F");
+  pdf.setFontSize(7); pdf.setTextColor(255, 255, 255);
+  const colX = [mx + 6, mx + 66, pageW - mx - 100, pageW - mx - 55, pageW - mx - 6];
+  pdf.text("CODIGO", colX[0], y + 13);
+  pdf.text("PRODUCTO", colX[1], y + 13);
+  pdf.text("PRECIO", colX[2], y + 13, { align: "right" });
+  pdf.text("CANT.", colX[3], y + 13, { align: "right" });
+  pdf.text("TOTAL", colX[4], y + 13, { align: "right" });
+  y += 20;
+
+  items.forEach((it) => {
+    y += 20;
+    pdf.setFontSize(7.5);
+    pdf.setTextColor(120, 130, 140);
+    pdf.text(String(it.code || "—"), colX[0], y - 5);
+    pdf.setTextColor(20, 20, 20);
+    pdf.text(String(it.name).slice(0, 28), colX[1], y - 5);
+    pdf.text(money(it.price), colX[2], y - 5, { align: "right" });
+    pdf.text(String(it.qty), colX[3], y - 5, { align: "right" });
+    pdf.setFont(undefined, "bold");
+    pdf.text(money(it.subtotal), colX[4], y - 5, { align: "right" });
+    pdf.setFont(undefined, "normal");
+    pdf.setDrawColor(240, 241, 243);
+    pdf.line(mx, y, pageW - mx, y);
+  });
+
+  y += 30;
+  pdf.setFontSize(10); pdf.setTextColor(120, 130, 140);
+  pdf.text("Total:", pageW - mx - 70, y);
+  pdf.setFontSize(16); pdf.setTextColor(10, 10, 10);
+  pdf.text(money(inv.total), pageW - mx, y, { align: "right" });
+
+  y += 24;
+  pdf.setFillColor(220, 199, 160);
+  pdf.roundedRect(mx, y, pageW - mx * 2, 56, 4, 4, "F");
+  pdf.setFontSize(6.5); pdf.setTextColor(92, 74, 46);
+  pdf.text("CONTACTO:", mx + 12, y + 16);
+  pdf.setFontSize(7.5); pdf.setTextColor(61, 49, 32);
+  pdf.text("angelsdesign_cba@outlook.com.ar", mx + 12, y + 30);
+  pdf.text("+54 9 3513 18-0068", mx + 12, y + 42);
+  pdf.text("Panamericano, Córdoba.", mx + 170, y + 42);
+
+  y += 70;
+  pdf.setFillColor(10, 10, 10);
+  pdf.rect(0, y, pageW, 26, "F");
+  pdf.setFontSize(8); pdf.setTextColor(255, 255, 255);
+  pdf.text("ALIAS PARA TRANSFERENCIA: angel.alonso.3d", pageW / 2, y + 16, { align: "center" });
+
+  y += 36;
+  pdf.setFontSize(7.5); pdf.setTextColor(150, 150, 150);
+  pdf.text("Gracias por elegirnos!", pageW / 2, y, { align: "center" });
+
+  pdf.save(`factura-${inv.number}.pdf`);
 }
 
 /* ======================================================
