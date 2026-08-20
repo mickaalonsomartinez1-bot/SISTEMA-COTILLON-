@@ -608,7 +608,7 @@ function openInvoiceModal(inv) {
   const yy = String(d.getFullYear()).slice(-2);
   const entrega = d.toLocaleDateString("es-AR");
 
-  wrap.innerHTML = `<div class="modal-bg"><div class="modal" style="max-width:460px;padding:0;overflow:hidden;">
+  wrap.innerHTML = `<div class="modal-bg"><div class="modal" style="max-width:460px;padding:0;overflow-y:auto;overflow-x:hidden;">
     <div id="invoiceCapture" style="background:#fff;">
     <div id="printable-invoice" style="padding:28px 26px 0;">
 
@@ -679,7 +679,7 @@ function openInvoiceModal(inv) {
     <p style="text-align:center;font-size:.72rem;color:#9AA6B0;padding:12px 20px 0;margin:0;">Gracias por elegirnos!</p>
     </div>
 
-    <div style="display:flex;gap:8px;padding:16px 26px 24px;">
+    <div style="display:flex;gap:8px;padding:16px 26px 24px;position:sticky;bottom:0;background:#fff;border-top:1px solid #F0F1F3;">
       <button id="invDownload" class="btn btn-blue" style="flex:1;">⬇️ Descargar PDF</button>
       <button onclick="window.print()" class="btn btn-black" style="flex:1;">🖨️ Imprimir</button>
       <button id="invCancel" class="btn btn-ghost">Cerrar</button>
