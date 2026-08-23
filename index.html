@@ -70,6 +70,7 @@ const ROLES = {
 let session = null, me = { label: "", role: "angels" };
 let tab = "dashboard";
 let selectedPedidos = [];
+let selectedInvoices = [];
 let products = [], movements = [], invoices = [], pedidos = [], notas = [];
 let channel = null;
 
@@ -636,12 +637,20 @@ async function completeSelectedPedidos(pedidosSeleccionados) {
    ====================================================== */
 function renderFacturas() {
   if (invoices.length === 0) return emptyState("Las facturas se generan solas al reponer stock o completar pedidos.");
-  return `<div style="display:flex;flex-direction:column;gap:8px;">${invoices.map((inv) => {
+  selectedInvoices = selectedInvoices.filter((id) => invoices.some((i) => i.id === id));
+  return `${me.isAdmin && selectedInvoices.length >= 2 ? `
+    <button id="combinarFacturas" class="btn btn-blue" style="margin-bottom:12px;">🧾 Combinar ${selectedInvoices.length} facturas en una sola</button>
+  ` : ""}
+  <div style="display:flex;flex-direction:column;gap:8px;">${invoices.map((inv) => {
     const paid = inv.payment_status === "pagado";
+    const checked = selectedInvoices.includes(inv.id);
     return `
-    <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">
-      <div><p style="margin:0;font-weight:700;font-size:.9rem;">${esc(inv.number)}</p>
-        <p style="margin:2px 0 0;font-size:.72rem;color:#9AA6B0;">${fmtDate(inv.created_at)} · ${esc(inv.user_label)}</p></div>
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;${checked ? "border-color:var(--blue);background:var(--blue-pale);" : ""}">
+      <div style="display:flex;align-items:center;gap:8px;">
+        ${me.isAdmin ? `<input type="checkbox" data-selinv="${inv.id}" ${checked ? "checked" : ""} style="width:16px;height:16px;accent-color:var(--blue);" />` : ""}
+        <div><p style="margin:0;font-weight:700;font-size:.9rem;">${esc(inv.number)}</p>
+          <p style="margin:2px 0 0;font-size:.72rem;color:#9AA6B0;">${fmtDate(inv.created_at)} · ${esc(inv.user_label)}</p></div>
+      </div>
       <div style="display:flex;align-items:center;gap:10px;">
         <button data-toggle-pay="${inv.id}" class="pill" style="border:none;cursor:pointer;background:${paid ? "#ECFDF5" : "var(--orange-pale)"};color:${paid ? "var(--green)" : "var(--orange)"};">${paid ? "✅ Pagado" : "⏳ Pendiente"}</button>
         <p class="disp" style="font-size:1.2rem;color:var(--blue);margin:0;">${money(inv.total)}</p>
@@ -662,6 +671,47 @@ function bindFacturas() {
     if (!confirm("¿Borrar esta factura definitivamente?")) return;
     await supabase.from("invoices").delete().eq("id", b.dataset.delinv);
   }));
+  document.querySelectorAll("[data-selinv]").forEach((cb) => (cb.onchange = (e) => {
+    const id = cb.dataset.selinv;
+    if (e.target.checked) { if (!selectedInvoices.includes(id)) selectedInvoices.push(id); }
+    else { selectedInvoices = selectedInvoices.filter((x) => x !== id); }
+    render();
+  }));
+  const combinarBtn = document.getElementById("combinarFacturas");
+  if (combinarBtn) combinarBtn.onclick = () => combineInvoices(invoices.filter((i) => selectedInvoices.includes(i.id)));
+}
+
+async function combineInvoices(facturasSeleccionadas) {
+  if (facturasSeleccionadas.length < 2) return;
+  if (!confirm(`¿Combinar estas ${facturasSeleccionadas.length} facturas en una sola nueva? Las originales se van a borrar y reemplazar por la combinada.`)) return;
+
+  const combinado = {};
+  for (const inv of facturasSeleccionadas) {
+    for (const it of inv.items || []) {
+      const key = it.productId || it.code || it.name;
+      if (!combinado[key]) {
+        combinado[key] = { productId: it.productId, name: it.name, code: it.code, qty: 0, price: it.price, subtotal: 0 };
+      }
+      combinado[key].qty += it.qty;
+      combinado[key].subtotal += it.subtotal;
+    }
+  }
+  const itemsCombinados = Object.values(combinado);
+  const total = itemsCombinados.reduce((s, it) => s + it.subtotal, 0);
+  const todasPagadas = facturasSeleccionadas.every((inv) => inv.payment_status === "pagado");
+  const number = `AD-${String(invoices.length + 1).padStart(4, "0")}`;
+
+  await supabase.from("invoices").insert({
+    number, user_label: me.label, total, items: itemsCombinados,
+    payment_status: todasPagadas ? "pagado" : "pendiente",
+  });
+
+  for (const inv of facturasSeleccionadas) {
+    await supabase.from("invoices").delete().eq("id", inv.id);
+  }
+
+  await logMovement("nota", { note: `Facturas ${facturasSeleccionadas.map((i) => i.number).join(", ")} combinadas en ${number}` });
+  selectedInvoices = [];
 }
 function openInvoiceModal(inv) {
   const wrap = document.getElementById("invModalWrap");
