@@ -69,6 +69,7 @@ const ROLES = {
 
 let session = null, me = { label: "", role: "angels" };
 let tab = "dashboard";
+let selectedPedidos = [];
 let products = [], movements = [], invoices = [], pedidos = [], notas = [];
 let channel = null;
 
@@ -459,23 +460,32 @@ function openStockModal(p, type) {
 function renderPedidos() {
   const pend = pedidos.filter((p) => p.status === "pendiente");
   const resto = pedidos.filter((p) => p.status !== "pendiente");
-  return `<div style="display:flex;justify-content:flex-end;margin-bottom:14px;">
+  const canManage = me.role === "angels" || me.isAdmin;
+  selectedPedidos = selectedPedidos.filter((id) => pend.some((p) => p.id === id));
+  return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:8px;flex-wrap:wrap;">
+    ${canManage && selectedPedidos.length > 0
+      ? `<button id="facturarSeleccionados" class="btn btn-blue">🧾 Facturar ${selectedPedidos.length} pedido(s) juntos</button>`
+      : `<span></span>`}
     <button id="newPedido" class="btn btn-orange">+ Nuevo pedido</button>
   </div>
   <p class="label" style="margin-bottom:8px;">Pendientes (${pend.length})</p>
-  ${pend.length === 0 ? emptyState("No hay pedidos pendientes.") : pend.map(pedidoCard).join("")}
-  ${resto.length > 0 ? `<p class="label" style="margin:20px 0 8px;">Historial de pedidos</p>${resto.map(pedidoCard).join("")}` : ""}
+  ${pend.length === 0 ? emptyState("No hay pedidos pendientes.") : pend.map((pe) => pedidoCard(pe, canManage)).join("")}
+  ${resto.length > 0 ? `<p class="label" style="margin:20px 0 8px;">Historial de pedidos</p>${resto.map((pe) => pedidoCard(pe, canManage)).join("")}` : ""}
   <div id="pedidoModalWrap"></div>`;
 }
-function pedidoCard(pe) {
+function pedidoCard(pe, canManage) {
   const r = roleOf(pe.requested_role);
   const statusColor = pe.status === "pendiente" ? "var(--orange)" : pe.status === "completado" ? "var(--green)" : "var(--red)";
   const statusBg = pe.status === "pendiente" ? "var(--orange-pale)" : pe.status === "completado" ? "#ECFDF5" : "var(--red-pale)";
-  return `<div class="card" style="margin-bottom:10px;">
+  const checked = selectedPedidos.includes(pe.id);
+  return `<div class="card" style="margin-bottom:10px;${checked ? "border-color:var(--blue);background:var(--blue-pale);" : ""}">
     <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:8px;">
-      <div>
-        <p style="margin:0;font-size:.8rem;color:var(--gray);display:flex;align-items:center;gap:2px;">${fmtDate(pe.created_at)} · ${avatar(pe.requested_role,16)}<b>${esc(pe.requested_by)}</b></p>
-        ${pe.note ? `<p style="margin:4px 0 0;font-size:.82rem;">"${esc(pe.note)}"</p>` : ""}
+      <div style="display:flex;align-items:start;gap:8px;">
+        ${pe.status === "pendiente" && canManage ? `<input type="checkbox" data-selped="${pe.id}" ${checked ? "checked" : ""} style="margin-top:3px;width:16px;height:16px;accent-color:var(--blue);" />` : ""}
+        <div>
+          <p style="margin:0;font-size:.8rem;color:var(--gray);display:flex;align-items:center;gap:2px;">${fmtDate(pe.created_at)} · ${avatar(pe.requested_role,16)}<b>${esc(pe.requested_by)}</b></p>
+          ${pe.note ? `<p style="margin:4px 0 0;font-size:.82rem;">"${esc(pe.note)}"</p>` : ""}
+        </div>
       </div>
       <div style="display:flex;align-items:center;gap:6px;">
         <span class="pill" style="background:${statusBg};color:${statusColor};">${pe.status}</span>
@@ -485,9 +495,9 @@ function pedidoCard(pe) {
     <div style="border-top:1px solid #F0F1F3;padding-top:8px;">
       ${(pe.items || []).map((it) => `<div style="display:flex;justify-content:space-between;font-size:.82rem;padding:2px 0;"><span>${esc(it.name)}</span><b>${it.qty} u.</b></div>`).join("")}
     </div>
-    ${pe.status === "pendiente" ? (me.role === "angels" ? `
+    ${pe.status === "pendiente" ? (canManage ? `
       <div style="display:flex;gap:8px;margin-top:10px;">
-        <button data-complete="${pe.id}" class="btn btn-blue" style="flex:1;padding:8px;font-size:.8rem;">✅ Completar (repone stock + factura)</button>
+        <button data-complete="${pe.id}" class="btn btn-blue" style="flex:1;padding:8px;font-size:.8rem;">✅ Completar solo (repone stock + factura)</button>
         <button data-cancel="${pe.id}" class="btn btn-ghost" style="padding:8px 12px;font-size:.8rem;">Cancelar</button>
       </div>` : `<p style="margin:8px 0 0;font-size:.72rem;color:#9AA6B0;">Esperando que Angel's Design lo complete.</p>`
     ) : pe.status === "completado" ? `<p style="margin:8px 0 0;font-size:.72rem;color:#9AA6B0;">Completado por ${esc(pe.completed_by)} el ${fmtDate(pe.completed_at)}</p>` : ""}
@@ -504,6 +514,14 @@ function bindPedidos() {
     if (!confirm("¿Borrar este pedido definitivamente?")) return;
     await supabase.from("pedidos").delete().eq("id", b.dataset.delped);
   }));
+  document.querySelectorAll("[data-selped]").forEach((cb) => (cb.onchange = (e) => {
+    const id = cb.dataset.selped;
+    if (e.target.checked) { if (!selectedPedidos.includes(id)) selectedPedidos.push(id); }
+    else { selectedPedidos = selectedPedidos.filter((x) => x !== id); }
+    render();
+  }));
+  const facturarBtn = document.getElementById("facturarSeleccionados");
+  if (facturarBtn) facturarBtn.onclick = () => completeSelectedPedidos(pedidos.filter((p) => selectedPedidos.includes(p.id)));
 }
 function openPedidoModal() {
   const wrap = document.getElementById("pedidoModalWrap");
@@ -566,6 +584,51 @@ async function completePedido(pe) {
   await supabase.from("invoices").insert({ number, user_label: me.label, total, items: itemsWithPrice });
   await supabase.from("pedidos").update({ status: "completado", completed_at: new Date().toISOString(), completed_by: me.label }).eq("id", pe.id);
   await logMovement("pedido_completado", { note: `Pedido de ${pe.requested_by} completado` });
+}
+
+async function completeSelectedPedidos(pedidosSeleccionados) {
+  if (!pedidosSeleccionados.length) return;
+  if (!confirm(`¿Facturar ${pedidosSeleccionados.length} pedidos juntos en una sola factura?`)) return;
+
+  // 1) Reponer stock y loguear movimiento por cada item de cada pedido
+  for (const pe of pedidosSeleccionados) {
+    for (const it of pe.items || []) {
+      const p = products.find((x) => x.id === it.product_id);
+      if (!p) continue;
+      const resultingStock = (p.stock || 0) + it.qty;
+      p.stock = resultingStock; // actualizar localmente para que el siguiente pedido sume bien
+      await supabase.from("products").update({ stock: resultingStock }).eq("id", p.id);
+      await logMovement("reposicion", { product_id: p.id, product_name: p.name, qty: it.qty, note: `Pedido de ${pe.requested_by} (facturado en conjunto)`, resulting_stock: resultingStock });
+    }
+  }
+
+  // 2) Combinar todos los items en una sola factura, sumando cantidades del mismo producto
+  const combinado = {};
+  for (const pe of pedidosSeleccionados) {
+    for (const it of pe.items || []) {
+      const p = products.find((x) => x.id === it.product_id);
+      const price = p ? p.price : 0;
+      if (!combinado[it.product_id]) {
+        combinado[it.product_id] = { productId: it.product_id, name: it.name, code: p?.code, qty: 0, price, subtotal: 0 };
+      }
+      combinado[it.product_id].qty += it.qty;
+      combinado[it.product_id].subtotal += price * it.qty;
+    }
+  }
+  const itemsWithPrice = Object.values(combinado);
+  const total = itemsWithPrice.reduce((s, it) => s + it.subtotal, 0);
+  const number = `AD-${String(invoices.length + 1).padStart(4, "0")}`;
+  const solicitantes = [...new Set(pedidosSeleccionados.map((p) => p.requested_by))].join(", ");
+
+  await supabase.from("invoices").insert({ number, user_label: me.label, total, items: itemsWithPrice });
+
+  // 3) Marcar todos los pedidos como completados
+  for (const pe of pedidosSeleccionados) {
+    await supabase.from("pedidos").update({ status: "completado", completed_at: new Date().toISOString(), completed_by: me.label }).eq("id", pe.id);
+  }
+  await logMovement("pedido_completado", { note: `${pedidosSeleccionados.length} pedidos combinados (${solicitantes}) en factura ${number}` });
+
+  selectedPedidos = [];
 }
 
 /* ======================================================
