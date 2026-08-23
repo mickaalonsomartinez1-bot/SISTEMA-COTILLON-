@@ -1,6 +1,21 @@
+// ============================================================
+// api/sync-to-angels.js
+// 1) Copia productos/facturas/pedidos/movimientos de Cotillón a
+//    tablas espejo en el CRM de Angels (cotillon_*), para tener
+//    todo visible ahí también.
+// 2) Además, por cada factura NUEVA de Cotillón, crea un PEDIDO
+//    de verdad en la tabla `pedidos` real del CRM de Angels,
+//    integrado con tus pedidos de siempre (mismo cliente,
+//    mismo formato de items_detalle, numeración correlativa).
+//
+// Variables de entorno necesarias en Vercel:
+//   COTILLON_SUPABASE_URL, COTILLON_SERVICE_KEY
+//   ANGELS_SUPABASE_URL, ANGELS_SERVICE_KEY
+// ============================================================
+
 import { createClient } from '@supabase/supabase-js';
 
-const COTILLON_CLIENTE_ID = "9fb57dfa-8242-4f34-a82d-10bf747c0fb1";
+const COTILLON_CLIENTE_ID = "9fb57dfa-8242-4f34-a82d-10bf747c0fb1"; // "Cotillón Arco Iris" en tabla clientes
 
 export default async function handler(req, res) {
   const auth = req.headers['authorization'];
@@ -13,6 +28,7 @@ export default async function handler(req, res) {
 
   const results = {};
 
+  // --- 1) Sincronización espejo (visibilidad general) ---
   async function syncMirror(sourceTable, targetTable, limit) {
     let query = source.from(sourceTable).select('*');
     if (limit) query = query.order('created_at', { ascending: false }).limit(limit);
@@ -32,6 +48,42 @@ export default async function handler(req, res) {
     results.mirror_error = String(err);
   }
 
+  // --- 2) Reflejar productos de Cotillón en el Catálogo del CRM (sin pisar lo cargado a mano) ---
+  try {
+    const { data: cotillonProducts, error: prodErr } = await source.from('products').select('*');
+    if (prodErr) {
+      results.catalogo = `error leyendo productos: ${prodErr.message}`;
+    } else if (!cotillonProducts || cotillonProducts.length === 0) {
+      results.catalogo = '0 productos';
+    } else {
+      let creados = 0, actualizados = 0;
+      const catErrors = [];
+      for (const p of cotillonProducts) {
+        if (!p.code) continue;
+        const { data: existing } = await target.from('catalogo').select('id').eq('codigo', p.code).maybeSingle();
+        if (existing) {
+          const { error: upErr } = await target.from('catalogo').update({
+            nombre: p.name,
+            precio_venta: p.price || 0,
+          }).eq('id', existing.id);
+          if (upErr) catErrors.push(`${p.code}: ${upErr.message}`); else actualizados++;
+        } else {
+          const { error: insErr } = await target.from('catalogo').insert({
+            codigo: p.code,
+            nombre: p.name,
+            precio_venta: p.price || 0,
+            categoria: (p.category || 'otro').toLowerCase(),
+          });
+          if (insErr) catErrors.push(`${p.code}: ${insErr.message}`); else creados++;
+        }
+      }
+      results.catalogo = `${creados} nuevo(s), ${actualizados} actualizado(s)${catErrors.length ? " · errores: " + catErrors.join(" | ") : ""}`;
+    }
+  } catch (err) {
+    results.catalogo_error = String(err);
+  }
+
+  // --- 2) Crear pedidos reales en el CRM de Angels a partir de facturas nuevas ---
   try {
     const { data: pendingInvoices, error: readErr } = await source
       .from('invoices')
@@ -43,6 +95,7 @@ export default async function handler(req, res) {
     } else if (!pendingInvoices || pendingInvoices.length === 0) {
       results.pedidos_reales = 'sin facturas nuevas';
     } else {
+      // Sacamos el próximo número correlativo una sola vez
       const { data: maxRow } = await target
         .from('pedidos')
         .select('numero')
