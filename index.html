@@ -140,6 +140,15 @@ function subscribeRealtime() {
     .on("postgres_changes", { event: "*", schema: "public", table: "notas" }, () => loadAll().then(render))
     .subscribe();
 }
+async function nextInvoiceNumber() {
+  const { data } = await supabase.from("invoices").select("number").order("created_at", { ascending: false }).limit(200);
+  let maxN = 0;
+  (data || []).forEach((inv) => {
+    const m = /AD-(\d+)/.exec(inv.number || "");
+    if (m) maxN = Math.max(maxN, parseInt(m[1], 10));
+  });
+  return `AD-${String(maxN + 1).padStart(4, "0")}`;
+}
 async function logMovement(type, extra) {
   await supabase.from("movements").insert({ user_label: me.label, user_role: me.role, type, ...extra });
 }
@@ -447,7 +456,7 @@ function openStockModal(p, type) {
     await supabase.from("products").update({ stock: resultingStock }).eq("id", p.id);
     await logMovement(type, { product_id: p.id, product_name: p.name, qty: n, note, resulting_stock: resultingStock });
     if (type === "reposicion") {
-      const number = `AD-${String(invoices.length + 1).padStart(4, "0")}`;
+      const number = await nextInvoiceNumber();
       await supabase.from("invoices").insert({ number, user_label: me.label, total: p.price * n,
         items: [{ productId: p.id, name: p.name, code: p.code, qty: n, price: p.price, subtotal: p.price * n }] });
     }
@@ -462,16 +471,16 @@ function renderPedidos() {
   const pend = pedidos.filter((p) => p.status === "pendiente");
   const resto = pedidos.filter((p) => p.status !== "pendiente");
   const canManage = me.role === "angels" || me.isAdmin;
-  selectedPedidos = selectedPedidos.filter((id) => pend.some((p) => p.id === id));
+  selectedPedidos = selectedPedidos.filter((id) => pedidos.some((p) => p.id === id && p.status !== "combinado"));
   return `<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;gap:8px;flex-wrap:wrap;">
-    ${canManage && selectedPedidos.length > 0
-      ? `<button id="facturarSeleccionados" class="btn btn-blue">🧾 Facturar ${selectedPedidos.length} pedido(s) juntos</button>`
+    ${canManage && selectedPedidos.length >= 2
+      ? `<button id="unirPedidos" class="btn btn-blue">🧾 Unir ${selectedPedidos.length} pedidos en uno</button>`
       : `<span></span>`}
     <button id="newPedido" class="btn btn-orange">+ Nuevo pedido</button>
   </div>
   <p class="label" style="margin-bottom:8px;">Pendientes (${pend.length})</p>
   ${pend.length === 0 ? emptyState("No hay pedidos pendientes.") : pend.map((pe) => pedidoCard(pe, canManage)).join("")}
-  ${resto.length > 0 ? `<p class="label" style="margin:20px 0 8px;">Historial de pedidos</p>${resto.map((pe) => pedidoCard(pe, canManage)).join("")}` : ""}
+  ${resto.length > 0 ? `<p class="label" style="margin:20px 0 8px;">Historial de pedidos</p>${resto.filter((p) => p.status !== "combinado").map((pe) => pedidoCard(pe, canManage)).join("")}` : ""}
   <div id="pedidoModalWrap"></div>`;
 }
 function pedidoCard(pe, canManage) {
@@ -479,10 +488,11 @@ function pedidoCard(pe, canManage) {
   const statusColor = pe.status === "pendiente" ? "var(--orange)" : pe.status === "completado" ? "var(--green)" : "var(--red)";
   const statusBg = pe.status === "pendiente" ? "var(--orange-pale)" : pe.status === "completado" ? "#ECFDF5" : "var(--red-pale)";
   const checked = selectedPedidos.includes(pe.id);
+  const puedeSeleccionar = canManage && pe.status !== "cancelado";
   return `<div class="card" style="margin-bottom:10px;${checked ? "border-color:var(--blue);background:var(--blue-pale);" : ""}">
     <div style="display:flex;justify-content:space-between;align-items:start;margin-bottom:8px;">
       <div style="display:flex;align-items:start;gap:8px;">
-        ${pe.status === "pendiente" && canManage ? `<input type="checkbox" data-selped="${pe.id}" ${checked ? "checked" : ""} style="margin-top:3px;width:16px;height:16px;accent-color:var(--blue);" />` : ""}
+        ${puedeSeleccionar ? `<input type="checkbox" data-selped="${pe.id}" ${checked ? "checked" : ""} style="margin-top:3px;width:16px;height:16px;accent-color:var(--blue);" />` : ""}
         <div>
           <p style="margin:0;font-size:.8rem;color:var(--gray);display:flex;align-items:center;gap:2px;">${fmtDate(pe.created_at)} · ${avatar(pe.requested_role,16)}<b>${esc(pe.requested_by)}</b></p>
           ${pe.note ? `<p style="margin:4px 0 0;font-size:.82rem;">"${esc(pe.note)}"</p>` : ""}
@@ -490,6 +500,7 @@ function pedidoCard(pe, canManage) {
       </div>
       <div style="display:flex;align-items:center;gap:6px;">
         <span class="pill" style="background:${statusBg};color:${statusColor};">${pe.status}</span>
+        ${me.isAdmin ? `<button data-editped="${pe.id}" title="Editar cantidades / productos" style="border:none;background:none;color:#9AA6B0;cursor:pointer;">✏️</button>` : ""}
         ${me.isAdmin ? `<button data-delped="${pe.id}" title="Borrar pedido" style="border:none;background:none;color:#D1D5DB;cursor:pointer;">✕</button>` : ""}
       </div>
     </div>
@@ -515,15 +526,88 @@ function bindPedidos() {
     if (!confirm("¿Borrar este pedido definitivamente?")) return;
     await supabase.from("pedidos").delete().eq("id", b.dataset.delped);
   }));
+  document.querySelectorAll("[data-editped]").forEach((b) => (b.onclick = () => openEditPedidoModal(pedidos.find((p) => p.id === b.dataset.editped))));
   document.querySelectorAll("[data-selped]").forEach((cb) => (cb.onchange = (e) => {
     const id = cb.dataset.selped;
     if (e.target.checked) { if (!selectedPedidos.includes(id)) selectedPedidos.push(id); }
     else { selectedPedidos = selectedPedidos.filter((x) => x !== id); }
     render();
   }));
-  const facturarBtn = document.getElementById("facturarSeleccionados");
-  if (facturarBtn) facturarBtn.onclick = () => completeSelectedPedidos(pedidos.filter((p) => selectedPedidos.includes(p.id)));
+  const unirBtn = document.getElementById("unirPedidos");
+  if (unirBtn) unirBtn.onclick = () => unirPedidos(pedidos.filter((p) => selectedPedidos.includes(p.id)));
 }
+function openEditPedidoModal(pe) {
+  const wrap = document.getElementById("pedidoModalWrap");
+  let rows = (pe.items || []).map((it) => ({ productId: it.product_id, qty: it.qty }));
+
+  function renderRows() {
+    return rows.map((row, i) => `
+      <div style="display:flex;gap:6px;margin-bottom:8px;" data-row="${i}">
+        <select class="in row-prod" style="flex:2;">
+          <option value="">Elegir producto...</option>
+          ${products.map((p) => `<option value="${p.id}" ${row.productId === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}
+        </select>
+        <input type="number" class="in row-qty" style="width:70px;" value="${row.qty}" min="1" />
+        <button data-rmrow="${i}" class="btn btn-ghost" style="padding:8px 10px;">✕</button>
+      </div>`).join("");
+  }
+  function paint() {
+    wrap.innerHTML = `<div class="modal-bg"><div class="modal">
+      <p class="disp" style="font-size:1.2rem;margin:0 0 6px;">Editar pedido</p>
+      ${pe.status === "completado" ? `<p style="font-size:.72rem;color:var(--orange);background:var(--orange-pale);border-radius:8px;padding:8px 10px;margin-bottom:14px;">Este pedido ya está completado: al guardar, el stock se ajusta solo según la diferencia${pe.invoice_id ? ", y la factura vinculada se actualiza sola." : ". Si ya generó una factura pero no está vinculada (pedidos viejos), revisala a mano en Facturas."}</p>` : ""}
+      <div id="rowsWrap">${renderRows()}</div>
+      <button id="addRow" class="btn btn-ghost" style="width:100%;margin-bottom:14px;font-size:.8rem;">+ Agregar otro producto</button>
+      <button id="peSaveEdit" class="btn btn-blue" style="width:100%;margin-bottom:8px;">Guardar cambios</button>
+      <button id="peCancelEdit" class="btn btn-ghost" style="width:100%;">Cancelar</button>
+    </div></div>`;
+    document.querySelectorAll(".row-prod").forEach((el, i) => (el.onchange = (e) => (rows[i].productId = e.target.value)));
+    document.querySelectorAll(".row-qty").forEach((el, i) => (el.oninput = (e) => (rows[i].qty = Number(e.target.value) || 1)));
+    document.querySelectorAll("[data-rmrow]").forEach((b) => (b.onclick = () => { rows.splice(Number(b.dataset.rmrow), 1); paint(); }));
+    document.getElementById("addRow").onclick = () => { rows.push({ productId: "", qty: 1 }); paint(); };
+    document.getElementById("peCancelEdit").onclick = () => (wrap.innerHTML = "");
+    document.getElementById("peSaveEdit").onclick = async () => {
+      const nuevosItems = rows.filter((r) => r.productId).map((r) => {
+        const p = products.find((x) => x.id === r.productId);
+        return { product_id: p.id, name: p.name, qty: r.qty };
+      });
+      if (nuevosItems.length === 0) return;
+
+      if (pe.status === "completado") {
+        const oldQtyByProduct = {};
+        (pe.items || []).forEach((it) => { oldQtyByProduct[it.product_id] = (oldQtyByProduct[it.product_id] || 0) + it.qty; });
+        const newQtyByProduct = {};
+        nuevosItems.forEach((it) => { newQtyByProduct[it.product_id] = (newQtyByProduct[it.product_id] || 0) + it.qty; });
+        const allProductIds = new Set([...Object.keys(oldQtyByProduct), ...Object.keys(newQtyByProduct)]);
+        for (const pid of allProductIds) {
+          const delta = (newQtyByProduct[pid] || 0) - (oldQtyByProduct[pid] || 0);
+          if (delta === 0) continue;
+          const p = products.find((x) => x.id === pid);
+          if (!p) continue;
+          const resultingStock = Math.max(0, (p.stock || 0) + delta);
+          await supabase.from("products").update({ stock: resultingStock }).eq("id", p.id);
+          await logMovement("reposicion", { product_id: p.id, product_name: p.name, qty: delta, note: `Corrección de cantidades en pedido de ${pe.requested_by}`, resulting_stock: resultingStock });
+        }
+      }
+
+      await supabase.from("pedidos").update({ items: nuevosItems }).eq("id", pe.id);
+
+      // Si este pedido tiene una factura vinculada, la actualizamos sola para que coincida
+      if (pe.invoice_id) {
+        const itemsConPrecio = nuevosItems.map((it) => {
+          const p = products.find((x) => x.id === it.product_id);
+          const price = p ? p.price : 0;
+          return { productId: it.product_id, name: it.name, code: p?.code, qty: it.qty, price, subtotal: price * it.qty };
+        });
+        const nuevoTotal = itemsConPrecio.reduce((s, it) => s + it.subtotal, 0);
+        await supabase.from("invoices").update({ items: itemsConPrecio, total: nuevoTotal }).eq("id", pe.invoice_id);
+      }
+
+      wrap.innerHTML = "";
+    };
+  }
+  paint();
+}
+
 function openPedidoModal() {
   const wrap = document.getElementById("pedidoModalWrap");
   let rows = [{ productId: "", qty: 1 }];
@@ -581,54 +665,70 @@ async function completePedido(pe) {
     return { productId: it.product_id, name: it.name, code: p?.code, qty: it.qty, price, subtotal: price * it.qty };
   });
   const total = itemsWithPrice.reduce((s, it) => s + it.subtotal, 0);
-  const number = `AD-${String(invoices.length + 1).padStart(4, "0")}`;
-  await supabase.from("invoices").insert({ number, user_label: me.label, total, items: itemsWithPrice });
-  await supabase.from("pedidos").update({ status: "completado", completed_at: new Date().toISOString(), completed_by: me.label }).eq("id", pe.id);
+  const number = await nextInvoiceNumber();
+  const { data: nuevaFactura } = await supabase.from("invoices").insert({ number, user_label: me.label, total, items: itemsWithPrice }).select().single();
+  await supabase.from("pedidos").update({ status: "completado", completed_at: new Date().toISOString(), completed_by: me.label, invoice_id: nuevaFactura?.id || null }).eq("id", pe.id);
   await logMovement("pedido_completado", { note: `Pedido de ${pe.requested_by} completado` });
 }
 
-async function completeSelectedPedidos(pedidosSeleccionados) {
-  if (!pedidosSeleccionados.length) return;
-  if (!confirm(`¿Facturar ${pedidosSeleccionados.length} pedidos juntos en una sola factura?`)) return;
+async function unirPedidos(seleccionados) {
+  if (seleccionados.length < 2) return;
+  if (!confirm(`¿Unir estos ${seleccionados.length} pedidos en uno solo? Los originales se reemplazan por el pedido unido, con una sola factura.`)) return;
 
-  // 1) Reponer stock y loguear movimiento por cada item de cada pedido
-  for (const pe of pedidosSeleccionados) {
+  // 1) Reponer stock SOLO de los que todavía estaban pendientes (los completados ya sumaron su stock antes)
+  for (const pe of seleccionados) {
+    if (pe.status !== "pendiente") continue;
     for (const it of pe.items || []) {
       const p = products.find((x) => x.id === it.product_id);
       if (!p) continue;
       const resultingStock = (p.stock || 0) + it.qty;
-      p.stock = resultingStock; // actualizar localmente para que el siguiente pedido sume bien
+      p.stock = resultingStock;
       await supabase.from("products").update({ stock: resultingStock }).eq("id", p.id);
-      await logMovement("reposicion", { product_id: p.id, product_name: p.name, qty: it.qty, note: `Pedido de ${pe.requested_by} (facturado en conjunto)`, resulting_stock: resultingStock });
+      await logMovement("reposicion", { product_id: p.id, product_name: p.name, qty: it.qty, note: `Pedido de ${pe.requested_by} (unido)`, resulting_stock: resultingStock });
     }
   }
 
-  // 2) Combinar todos los items en una sola factura, sumando cantidades del mismo producto
+  // 2) Combinar items de todos, sumando cantidades del mismo producto
   const combinado = {};
-  for (const pe of pedidosSeleccionados) {
-    for (const it of pe.items || []) {
-      const p = products.find((x) => x.id === it.product_id);
-      const price = p ? p.price : 0;
-      if (!combinado[it.product_id]) {
-        combinado[it.product_id] = { productId: it.product_id, name: it.name, code: p?.code, qty: 0, price, subtotal: 0 };
-      }
+  seleccionados.forEach((pe) => {
+    (pe.items || []).forEach((it) => {
+      if (!combinado[it.product_id]) combinado[it.product_id] = { product_id: it.product_id, name: it.name, qty: 0 };
       combinado[it.product_id].qty += it.qty;
-      combinado[it.product_id].subtotal += price * it.qty;
-    }
-  }
-  const itemsWithPrice = Object.values(combinado);
+    });
+  });
+  const itemsUnidos = Object.values(combinado);
+  const itemsWithPrice = itemsUnidos.map((it) => {
+    const p = products.find((x) => x.id === it.product_id);
+    const price = p ? p.price : 0;
+    return { productId: it.product_id, name: it.name, code: p?.code, qty: it.qty, price, subtotal: price * it.qty };
+  });
   const total = itemsWithPrice.reduce((s, it) => s + it.subtotal, 0);
-  const number = `AD-${String(invoices.length + 1).padStart(4, "0")}`;
-  const solicitantes = [...new Set(pedidosSeleccionados.map((p) => p.requested_by))].join(", ");
 
-  await supabase.from("invoices").insert({ number, user_label: me.label, total, items: itemsWithPrice });
-
-  // 3) Marcar todos los pedidos como completados
-  for (const pe of pedidosSeleccionados) {
-    await supabase.from("pedidos").update({ status: "completado", completed_at: new Date().toISOString(), completed_by: me.label }).eq("id", pe.id);
+  // 3) Borrar las facturas individuales que ya existían (de los que estaban completados)
+  const facturasViejas = seleccionados.map((pe) => pe.invoice_id).filter(Boolean);
+  for (const invId of facturasViejas) {
+    await supabase.from("invoices").delete().eq("id", invId);
   }
-  await logMovement("pedido_completado", { note: `${pedidosSeleccionados.length} pedidos combinados (${solicitantes}) en factura ${number}` });
 
+  // 4) Crear UNA factura nueva con todo junto
+  const number = await nextInvoiceNumber();
+  const { data: nuevaFactura, error: insErr } = await supabase.from("invoices").insert({ number, user_label: me.label, total, items: itemsWithPrice }).select().single();
+  if (insErr || !nuevaFactura) {
+    alert("No se pudo crear la factura unida, así que no se tocó ningún pedido. Error: " + (insErr?.message || "desconocido"));
+    return;
+  }
+
+  // 5) Crear el pedido unido, y marcar los originales como "combinado" (quedan en el historial, sin duplicar)
+  const solicitantes = [...new Set(seleccionados.map((p) => p.requested_by))].join(", ");
+  await supabase.from("pedidos").insert({
+    requested_by: solicitantes, requested_role: me.role, status: "completado", items: itemsUnidos,
+    note: `Unión de ${seleccionados.length} pedidos`, completed_at: new Date().toISOString(), completed_by: me.label, invoice_id: nuevaFactura.id,
+  });
+  for (const pe of seleccionados) {
+    await supabase.from("pedidos").update({ status: "combinado" }).eq("id", pe.id);
+  }
+
+  await logMovement("nota", { note: `${seleccionados.length} pedidos unidos en factura ${number}` });
   selectedPedidos = [];
 }
 
@@ -699,15 +799,23 @@ async function combineInvoices(facturasSeleccionadas) {
   const itemsCombinados = Object.values(combinado);
   const total = itemsCombinados.reduce((s, it) => s + it.subtotal, 0);
   const todasPagadas = facturasSeleccionadas.every((inv) => inv.payment_status === "pagado");
-  const number = `AD-${String(invoices.length + 1).padStart(4, "0")}`;
+  const number = await nextInvoiceNumber();
 
-  await supabase.from("invoices").insert({
+  const { data: nuevaFactura, error: insErr } = await supabase.from("invoices").insert({
     number, user_label: me.label, total, items: itemsCombinados,
     payment_status: todasPagadas ? "pagado" : "pendiente",
-  });
+  }).select().single();
+
+  if (insErr || !nuevaFactura) {
+    alert("No se pudo crear la factura combinada, así que NO se borró ninguna de las originales. Error: " + (insErr?.message || "desconocido"));
+    return;
+  }
 
   for (const inv of facturasSeleccionadas) {
-    await supabase.from("invoices").delete().eq("id", inv.id);
+    const { error: delErr } = await supabase.from("invoices").delete().eq("id", inv.id);
+    if (delErr) {
+      alert(`La factura combinada ${number} ya se creó, pero no se pudo borrar la original ${inv.number}. Borrala a mano si hace falta.`);
+    }
   }
 
   await logMovement("nota", { note: `Facturas ${facturasSeleccionadas.map((i) => i.number).join(", ")} combinadas en ${number}` });
@@ -795,10 +903,13 @@ function openInvoiceModal(inv) {
     <div style="display:flex;gap:8px;padding:16px 26px 24px;position:sticky;bottom:0;background:#fff;border-top:1px solid #F0F1F3;">
       <button id="invDownload" class="btn btn-blue" style="flex:1;">⬇️ Descargar PDF</button>
       <button onclick="window.print()" class="btn btn-black" style="flex:1;">🖨️ Imprimir</button>
+      ${me.isAdmin ? `<button id="invEdit" class="btn btn-ghost">✏️ Editar</button>` : ""}
       <button id="invCancel" class="btn btn-ghost">Cerrar</button>
     </div>
   </div></div>`;
   document.getElementById("invCancel").onclick = () => (wrap.innerHTML = "");
+  const editBtn = document.getElementById("invEdit");
+  if (editBtn) editBtn.onclick = () => openEditInvoiceModal(inv);
   document.getElementById("invDownload").onclick = () => {
     try {
       generateInvoicePDF(inv);
@@ -807,6 +918,45 @@ function openInvoiceModal(inv) {
       console.error(err);
     }
   };
+}
+
+function openEditInvoiceModal(inv) {
+  const wrap = document.getElementById("invModalWrap");
+  let rows = (inv.items || []).map((it) => ({ ...it }));
+
+  function renderRows() {
+    return rows.map((row, i) => `
+      <div style="display:flex;gap:6px;margin-bottom:8px;align-items:center;" data-row="${i}">
+        <span style="flex:2;font-size:.82rem;">${esc(row.name)}</span>
+        <input type="number" class="in row-price" style="width:80px;" value="${row.price}" placeholder="Precio" />
+        <input type="number" class="in row-qty" style="width:60px;" value="${row.qty}" placeholder="Cant." />
+        <button data-rmrow="${i}" class="btn btn-ghost" style="padding:8px 10px;">✕</button>
+      </div>`).join("");
+  }
+  function paint() {
+    const total = rows.reduce((s, r) => s + (Number(r.price) || 0) * (Number(r.qty) || 0), 0);
+    wrap.innerHTML = `<div class="modal-bg"><div class="modal">
+      <p class="disp" style="font-size:1.2rem;margin:0 0 6px;">Editar factura ${esc(inv.number)}</p>
+      <p style="font-size:.72rem;color:var(--orange);background:var(--orange-pale);border-radius:8px;padding:8px 10px;margin-bottom:14px;">Esto NO ajusta el stock ni el pedido original — solo corrige el contenido de esta factura.</p>
+      <div id="rowsWrapInv">${renderRows()}</div>
+      <div style="display:flex;justify-content:space-between;margin:12px 0 16px;font-weight:700;">
+        <span>Nuevo total:</span><span class="disp" style="font-size:1.3rem;">${money(total)}</span>
+      </div>
+      <button id="invSaveEdit" class="btn btn-blue" style="width:100%;margin-bottom:8px;">Guardar cambios</button>
+      <button id="invCancelEdit" class="btn btn-ghost" style="width:100%;">Cancelar</button>
+    </div></div>`;
+    document.querySelectorAll(".row-price").forEach((el, i) => (el.oninput = (e) => { rows[i].price = Number(e.target.value) || 0; paint(); }));
+    document.querySelectorAll(".row-qty").forEach((el, i) => (el.oninput = (e) => { rows[i].qty = Number(e.target.value) || 0; paint(); }));
+    document.querySelectorAll("[data-rmrow]").forEach((b) => (b.onclick = () => { rows.splice(Number(b.dataset.rmrow), 1); paint(); }));
+    document.getElementById("invCancelEdit").onclick = () => (wrap.innerHTML = "");
+    document.getElementById("invSaveEdit").onclick = async () => {
+      const itemsFinales = rows.map((r) => ({ ...r, subtotal: (Number(r.price) || 0) * (Number(r.qty) || 0) }));
+      const totalFinal = itemsFinales.reduce((s, it) => s + it.subtotal, 0);
+      await supabase.from("invoices").update({ items: itemsFinales, total: totalFinal }).eq("id", inv.id);
+      wrap.innerHTML = "";
+    };
+  }
+  paint();
 }
 
 function generateInvoicePDF(inv) {
