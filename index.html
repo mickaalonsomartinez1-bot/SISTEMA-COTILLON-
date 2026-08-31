@@ -382,6 +382,8 @@ function openProdModal(p) {
       <div><label class="label">Precio</label><input id="fPrice" type="number" class="in" value="${p ? p.price : ""}" placeholder="0" /></div>
       <div><label class="label">Stock crítico</label><input id="fCrit" type="number" class="in" value="${p ? p.critical_stock : "5"}" placeholder="5" /></div>
     </div>
+    <label class="label">Stock disponible ${p ? "" : "(cuántos tenés ahora)"}</label>
+    <input id="fStock" type="number" class="in" style="margin-bottom:14px;" value="${p ? (p.stock || 0) : "0"}" placeholder="0" />
     <button id="fSave" class="btn btn-blue" style="width:100%;margin-bottom:8px;">Guardar</button>
     <button id="fCancel" class="btn btn-ghost" style="width:100%;">Cancelar</button>
   </div></div>`;
@@ -392,13 +394,14 @@ function openProdModal(p) {
     const category = document.getElementById("fCat").value.trim() || "General";
     const price = Number(document.getElementById("fPrice").value) || 0;
     const criticalStock = Number(document.getElementById("fCrit").value) || 0;
+    const stockVal = Number(document.getElementById("fStock").value) || 0;
     if (!code || !name) return;
     if (p) {
-      await supabase.from("products").update({ code, name, category, price, critical_stock: criticalStock }).eq("id", p.id);
+      await supabase.from("products").update({ code, name, category, price, critical_stock: criticalStock, stock: stockVal }).eq("id", p.id);
       await logMovement("producto_editado", { product_name: name, note: "Datos actualizados" });
     } else {
-      await supabase.from("products").insert({ code, name, category, price, critical_stock: criticalStock, stock: 0 });
-      await logMovement("producto_creado", { product_name: name, note: `Código ${code}` });
+      await supabase.from("products").insert({ code, name, category, price, critical_stock: criticalStock, stock: stockVal });
+      await logMovement("producto_creado", { product_name: name, note: `Código ${code} · stock inicial ${stockVal}` });
     }
     wrap.innerHTML = "";
   };
