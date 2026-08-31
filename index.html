@@ -312,7 +312,7 @@ function statCard(value, label, alert, color) {
 }
 function movementRow(m) {
   const meta = {
-    venta: ["🔻","Venta"], reposicion: ["🔺","Reposición"], producto_creado: ["➕","Producto creado"],
+    venta: ["🔻","Venta"], reposicion: ["🔺","Reposición"], ajuste: ["⚙️","Ajuste de stock"], producto_creado: ["➕","Producto creado"],
     producto_editado: ["✏️","Producto editado"], producto_eliminado: ["🗑️","Producto eliminado"],
     pedido_creado: ["📋","Pedido creado"], pedido_completado: ["✅","Pedido completado"], nota: ["📝","Nota"],
   }[m.type] || ["•", m.type];
@@ -427,7 +427,8 @@ function renderStock() {
         <td><b style="color:${low ? "var(--red)" : "var(--black)"};">${p.stock || 0}</b>${low ? ' <span style="color:var(--red);font-size:.65rem;font-weight:700;">CRÍTICO</span>' : ""}</td>
         <td style="text-align:right;white-space:nowrap;">
           ${canVenta ? `<button data-venta="${p.id}" class="pill" style="background:var(--red-pale);color:var(--red);border:none;cursor:pointer;margin-right:4px;">🔻 Venta</button>` : ""}
-          ${canRepo ? `<button data-repo="${p.id}" class="pill" style="background:var(--blue-pale);color:var(--blue);border:none;cursor:pointer;">🔺 Reponer</button>` : ""}
+          ${canRepo ? `<button data-repo="${p.id}" class="pill" style="background:var(--blue-pale);color:var(--blue);border:none;cursor:pointer;margin-right:4px;">🔺 Reponer</button>` : ""}
+          <button data-ajustar="${p.id}" class="pill" style="background:var(--gray-light);color:var(--gray);border:none;cursor:pointer;">⚙️ Ajustar</button>
         </td></tr>`;
     }).join("")}</tbody></table></div><div id="stockModalWrap"></div>`;
 }
@@ -435,6 +436,29 @@ function bindStock() {
   document.querySelectorAll("[data-cat]").forEach((b) => (b.onclick = () => { stockCategory = b.dataset.cat; render(); }));
   document.querySelectorAll("[data-venta]").forEach((b) => (b.onclick = () => openStockModal(products.find((p) => p.id === b.dataset.venta), "venta")));
   document.querySelectorAll("[data-repo]").forEach((b) => (b.onclick = () => openStockModal(products.find((p) => p.id === b.dataset.repo), "reposicion")));
+  document.querySelectorAll("[data-ajustar]").forEach((b) => (b.onclick = () => openAjusteModal(products.find((p) => p.id === b.dataset.ajustar))));
+}
+function openAjusteModal(p) {
+  const wrap = document.getElementById("stockModalWrap");
+  wrap.innerHTML = `<div class="modal-bg"><div class="modal">
+    <p class="disp" style="font-size:1.1rem;margin:0 0 6px;">Ajustar stock · ${esc(p.name)}</p>
+    <p style="font-size:.72rem;color:var(--gray);margin:0 0 14px;">Para cargar el conteo real (relevamiento), sin generar factura ni pasar por un pedido.</p>
+    <label class="label">Disponible</label><input id="ajDisp" type="number" class="in" style="margin-bottom:10px;" value="${p.stock || 0}" />
+    <label class="label">Crítico (mínimo antes de alertar)</label><input id="ajCrit" type="number" class="in" style="margin-bottom:14px;" value="${p.critical_stock || 0}" />
+    <button id="ajConfirm" class="btn btn-blue" style="width:100%;margin-bottom:8px;">Guardar</button>
+    <button id="ajCancel" class="btn btn-ghost" style="width:100%;">Cancelar</button>
+  </div></div>`;
+  document.getElementById("ajCancel").onclick = () => (wrap.innerHTML = "");
+  document.getElementById("ajConfirm").onclick = async () => {
+    const nuevoDisponible = Number(document.getElementById("ajDisp").value) || 0;
+    const nuevoCritico = Number(document.getElementById("ajCrit").value) || 0;
+    const anterior = p.stock || 0;
+    await supabase.from("products").update({ stock: nuevoDisponible, critical_stock: nuevoCritico }).eq("id", p.id);
+    if (nuevoDisponible !== anterior) {
+      await logMovement("ajuste", { product_id: p.id, product_name: p.name, qty: nuevoDisponible - anterior, note: `Relevamiento: ${anterior} → ${nuevoDisponible}`, resulting_stock: nuevoDisponible });
+    }
+    wrap.innerHTML = "";
+  };
 }
 function openStockModal(p, type) {
   const wrap = document.getElementById("stockModalWrap");
