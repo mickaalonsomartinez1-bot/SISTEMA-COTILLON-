@@ -18,10 +18,9 @@ import { createClient } from '@supabase/supabase-js';
 const COTILLON_CLIENTE_ID = "9fb57dfa-8242-4f34-a82d-10bf747c0fb1"; // "Cotillón Arco Iris" en tabla clientes
 
 export default async function handler(req, res) {
-  const auth = req.headers['authorization'];
-  if (process.env.CRON_SECRET && auth !== `Bearer ${process.env.CRON_SECRET}`) {
-    return res.status(401).json({ error: 'unauthorized' });
-  }
+  // Nota: este endpoint ahora tambien lo dispara la propia app (ya protegida
+  // por el login de Supabase) cada 45s para mantener todo sincronizado solo,
+  // ademas del cron. Por eso ya no exige el CRON_SECRET.
 
   const source = createClient(process.env.COTILLON_SUPABASE_URL, process.env.COTILLON_SERVICE_KEY);
   const target = createClient(process.env.ANGELS_SUPABASE_URL, process.env.ANGELS_SERVICE_KEY);
