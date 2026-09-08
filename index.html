@@ -626,7 +626,9 @@ function openEditPedidoModal(pe) {
           return { productId: it.product_id, name: it.name, code: p?.code, qty: it.qty, price, subtotal: price * it.qty };
         });
         const nuevoTotal = itemsConPrecio.reduce((s, it) => s + it.subtotal, 0);
-        await supabase.from("invoices").update({ items: itemsConPrecio, total: nuevoTotal }).eq("id", pe.invoice_id);
+        // synced_to_angels: false para que la próxima sincronización vuelva a
+        // tomar esta factura y actualice el pedido reflejado en el CRM de Angels
+        await supabase.from("invoices").update({ items: itemsConPrecio, total: nuevoTotal, synced_to_angels: false }).eq("id", pe.invoice_id);
       }
 
       wrap.innerHTML = "";
@@ -792,7 +794,7 @@ function bindFacturas() {
   document.querySelectorAll("[data-toggle-pay]").forEach((b) => (b.onclick = async () => {
     const inv = invoices.find((i) => i.id === b.dataset.togglePay);
     const next = inv.payment_status === "pagado" ? "pendiente" : "pagado";
-    await supabase.from("invoices").update({ payment_status: next }).eq("id", inv.id);
+    await supabase.from("invoices").update({ payment_status: next, synced_to_angels: false }).eq("id", inv.id);
   }));
   document.querySelectorAll("[data-delinv]").forEach((b) => (b.onclick = async () => {
     if (!confirm("¿Borrar esta factura definitivamente?")) return;
@@ -979,7 +981,7 @@ function openEditInvoiceModal(inv) {
     document.getElementById("invSaveEdit").onclick = async () => {
       const itemsFinales = rows.map((r) => ({ ...r, subtotal: (Number(r.price) || 0) * (Number(r.qty) || 0) }));
       const totalFinal = itemsFinales.reduce((s, it) => s + it.subtotal, 0);
-      await supabase.from("invoices").update({ items: itemsFinales, total: totalFinal }).eq("id", inv.id);
+      await supabase.from("invoices").update({ items: itemsFinales, total: totalFinal, synced_to_angels: false }).eq("id", inv.id);
       wrap.innerHTML = "";
     };
   }
@@ -993,7 +995,7 @@ function generateInvoicePDF(inv) {
   const yy = String(d.getFullYear()).slice(-2);
   const entrega = d.toLocaleDateString("es-AR");
   const items = inv.items || [];
-  const pageW = 380;
+  const pageW = 460; // se ensancho para poder sumar la columna CATEGORIA
   const pageH = 470 + items.length * 20;
   const pdf = new jsPDF({ unit: "pt", format: [pageW, pageH] });
   const mx = 26;
@@ -1038,25 +1040,31 @@ function generateInvoicePDF(inv) {
   pdf.setFillColor(10, 10, 10);
   pdf.rect(mx, y, pageW - mx * 2, 20, "F");
   pdf.setFontSize(7); pdf.setTextColor(255, 255, 255);
-  const colX = [mx + 6, mx + 66, pageW - mx - 100, pageW - mx - 55, pageW - mx - 6];
+  const colX = [mx + 6, mx + 62, pageW - mx - 190, pageW - mx - 140, pageW - mx - 85, pageW - mx - 6];
   pdf.text("CODIGO", colX[0], y + 13);
   pdf.text("PRODUCTO", colX[1], y + 13);
-  pdf.text("PRECIO", colX[2], y + 13, { align: "right" });
-  pdf.text("CANT.", colX[3], y + 13, { align: "right" });
-  pdf.text("TOTAL", colX[4], y + 13, { align: "right" });
+  pdf.text("CATEGORIA", colX[2], y + 13);
+  pdf.text("PRECIO", colX[3], y + 13, { align: "right" });
+  pdf.text("CANT.", colX[4], y + 13, { align: "right" });
+  pdf.text("TOTAL", colX[5], y + 13, { align: "right" });
   y += 20;
 
   items.forEach((it) => {
     y += 20;
+    const prodInfo = products.find((p) => p.code === it.code);
+    const categoria = it.category || (prodInfo ? prodInfo.category : "") || "—";
     pdf.setFontSize(7.5);
     pdf.setTextColor(120, 130, 140);
     pdf.text(String(it.code || "—"), colX[0], y - 5);
     pdf.setTextColor(20, 20, 20);
-    pdf.text(String(it.name).slice(0, 28), colX[1], y - 5);
-    pdf.text(money(it.price), colX[2], y - 5, { align: "right" });
-    pdf.text(String(it.qty), colX[3], y - 5, { align: "right" });
+    pdf.text(String(it.name).slice(0, 20), colX[1], y - 5);
+    pdf.setTextColor(120, 130, 140);
+    pdf.text(String(categoria).slice(0, 14), colX[2], y - 5);
+    pdf.setTextColor(20, 20, 20);
+    pdf.text(money(it.price), colX[3], y - 5, { align: "right" });
+    pdf.text(String(it.qty), colX[4], y - 5, { align: "right" });
     pdf.setFont(undefined, "bold");
-    pdf.text(money(it.subtotal), colX[4], y - 5, { align: "right" });
+    pdf.text(money(it.subtotal), colX[5], y - 5, { align: "right" });
     pdf.setFont(undefined, "normal");
     pdf.setDrawColor(240, 241, 243);
     pdf.line(mx, y, pageW - mx, y);
