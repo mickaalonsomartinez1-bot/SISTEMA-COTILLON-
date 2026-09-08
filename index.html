@@ -583,6 +583,11 @@ function openEditPedidoModal(pe) {
         <select class="in row-prod" style="flex:2;">
           <option value="">Elegir producto...</option>
           ${[...products].sort((a,b)=>esc(a.name).localeCompare(esc(b.name))).map((p) => `<option value="${p.id}" ${row.productId === p.id ? "selected" : ""}>${esc(p.name)} — ${esc(p.category || "Sin categoria")}</option>`).join("")}
+        </select>
+        <input type="number" class="in row-qty" style="width:70px;" value="${row.qty}" min="1" />
+        <button data-rmrow="${i}" class="btn btn-ghost" style="padding:8px 10px;">✕</button>
+      </div>`).join("");
+  }
   function paint() {
     wrap.innerHTML = `<div class="modal-bg"><div class="modal">
       <p class="disp" style="font-size:1.2rem;margin:0 0 6px;">Editar pedido</p>
