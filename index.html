@@ -91,8 +91,18 @@ const avatar = (role, size) => {
 async function init() {
   const { data } = await supabase.auth.getSession();
   session = data.session;
-  if (session) { setMe(); await loadAll(); subscribeRealtime(); }
+  if (session) { setMe(); await loadAll(); subscribeRealtime(); iniciarSyncAutomatico(); }
   render();
+}
+// Dispara la sincronizacion con el CRM de Angels sola, sin que nadie tenga que
+// acordarse de apretar nada. Corre una vez al entrar y despues cada 45s mientras
+// la app este abierta, asi cualquier pedido nuevo o editado se refleja solo.
+let _syncAngelsInterval = null;
+function iniciarSyncAutomatico() {
+  if (_syncAngelsInterval) return;
+  const disparar = () => fetch("/api/sync-to-angels").catch(() => {});
+  disparar();
+  _syncAngelsInterval = setInterval(disparar, 45000);
 }
 const ADMIN_EMAIL = "angels@interno.com";
 const CATEGORIES = ["Cortantes", "Vinchas", "Topper", "Cotillón"];
@@ -106,7 +116,7 @@ function setMe() {
 }
 supabase.auth.onAuthStateChange((_e, s) => {
   session = s;
-  if (s) { setMe(); loadAll().then(() => { subscribeRealtime(); render(); }); }
+  if (s) { setMe(); loadAll().then(() => { subscribeRealtime(); iniciarSyncAutomatico(); render(); }); }
   else render();
 });
 async function login(email, password, errEl) {
