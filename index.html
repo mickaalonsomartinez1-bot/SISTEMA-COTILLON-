@@ -582,12 +582,7 @@ function openEditPedidoModal(pe) {
       <div style="display:flex;gap:6px;margin-bottom:8px;" data-row="${i}">
         <select class="in row-prod" style="flex:2;">
           <option value="">Elegir producto...</option>
-          ${products.map((p) => `<option value="${p.id}" ${row.productId === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}
-        </select>
-        <input type="number" class="in row-qty" style="width:70px;" value="${row.qty}" min="1" />
-        <button data-rmrow="${i}" class="btn btn-ghost" style="padding:8px 10px;">✕</button>
-      </div>`).join("");
-  }
+          ${[...products].sort((a,b)=>esc(a.name).localeCompare(esc(b.name))).map((p) => `<option value="${p.id}" ${row.productId === p.id ? "selected" : ""}>${esc(p.name)} — ${esc(p.category || "Sin categoria")}</option>`).join("")}
   function paint() {
     wrap.innerHTML = `<div class="modal-bg"><div class="modal">
       <p class="disp" style="font-size:1.2rem;margin:0 0 6px;">Editar pedido</p>
@@ -655,7 +650,7 @@ function openPedidoModal() {
       <div style="display:flex;gap:6px;margin-bottom:8px;" data-row="${i}">
         <select class="in row-prod" style="flex:2;">
           <option value="">Elegir producto...</option>
-          ${products.map((p) => `<option value="${p.id}" ${row.productId === p.id ? "selected" : ""}>${esc(p.name)}</option>`).join("")}
+          ${[...products].sort((a,b)=>esc(a.name).localeCompare(esc(b.name))).map((p) => `<option value="${p.id}" ${row.productId === p.id ? "selected" : ""}>${esc(p.name)} — ${esc(p.category || "Sin categoria")}</option>`).join("")}
         </select>
         <input type="number" class="in row-qty" style="width:70px;" value="${row.qty}" min="1" />
         ${rows.length > 1 ? `<button data-rmrow="${i}" class="btn btn-ghost" style="padding:8px 10px;">✕</button>` : ""}
@@ -1116,7 +1111,7 @@ function renderNotas() {
   return `<div class="card" style="margin-bottom:16px;">
     <label class="label">Producto (opcional)</label>
     <select id="notaProd" class="in" style="margin-bottom:10px;"><option value="">Nota general</option>
-      ${products.map((p) => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select>
+      ${[...products].sort((a,b)=>esc(a.name).localeCompare(esc(b.name))).map((p) => `<option value="${p.id}">${esc(p.name)} — ${esc(p.category || "Sin categoria")}</option>`).join("")}</select>
     <textarea id="notaText" class="in" style="min-height:70px;margin-bottom:10px;" placeholder="Escribí un mensaje interno para el otro equipo..."></textarea>
     <button id="notaSave" class="btn ${me.role === "cotillon" ? "btn-orange" : "btn-blue"}" style="width:100%;">Enviar mensaje</button>
   </div>
