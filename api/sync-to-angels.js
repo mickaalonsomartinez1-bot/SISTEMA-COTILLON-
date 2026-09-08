@@ -60,11 +60,17 @@ export default async function handler(req, res) {
       const catErrors = [];
       for (const p of cotillonProducts) {
         if (!p.code) continue;
-        const { data: existing } = await target.from('catalogo').select('id').eq('codigo', p.code).maybeSingle();
+        // OJO: usar .limit(1) en vez de .maybeSingle(). maybeSingle() tira error si
+        // encuentra MAS de una fila con ese codigo, y como no se chequeaba ese error,
+        // el código pensaba "no existe" y volvía a insertar -> esto fue lo que generó
+        // los cientos de duplicados en el catálogo.
+        const { data: existingRows } = await target.from('catalogo').select('id').eq('codigo', p.code).order('created_at', { ascending: true }).limit(1);
+        const existing = existingRows && existingRows[0];
         if (existing) {
           const { error: upErr } = await target.from('catalogo').update({
             nombre: p.name,
             precio_venta: p.price || 0,
+            categoria: p.category || 'Otro',
           }).eq('id', existing.id);
           if (upErr) catErrors.push(`${p.code}: ${upErr.message}`); else actualizados++;
         } else {
@@ -72,7 +78,7 @@ export default async function handler(req, res) {
             codigo: p.code,
             nombre: p.name,
             precio_venta: p.price || 0,
-            categoria: (p.category || 'otro').toLowerCase(),
+            categoria: p.category || 'Otro',
           });
           if (insErr) catErrors.push(`${p.code}: ${insErr.message}`); else creados++;
         }
@@ -83,7 +89,12 @@ export default async function handler(req, res) {
     results.catalogo_error = String(err);
   }
 
-  // --- 2) Crear pedidos reales en el CRM de Angels a partir de facturas nuevas ---
+  // --- 2) Crear o ACTUALIZAR pedidos reales en el CRM de Angels a partir de facturas ---
+  // synced_to_angels = false puede significar dos cosas:
+  //   a) factura nueva, nunca sincronizada  -> synced_pedido_id es null -> CREAR pedido
+  //   b) factura ya sincronizada, pero EDITADA despues (el index.html la marca de
+  //      nuevo como synced_to_angels:false al guardar cambios) -> synced_pedido_id
+  //      ya tiene un valor -> ACTUALIZAR ese mismo pedido en vez de crear otro
   try {
     const { data: pendingInvoices, error: readErr } = await source
       .from('invoices')
@@ -95,7 +106,7 @@ export default async function handler(req, res) {
     } else if (!pendingInvoices || pendingInvoices.length === 0) {
       results.pedidos_reales = 'sin facturas nuevas';
     } else {
-      // Sacamos el próximo número correlativo una sola vez
+      // Sacamos el próximo número correlativo una sola vez (solo se usa para las nuevas)
       const { data: maxRow } = await target
         .from('pedidos')
         .select('numero')
@@ -104,7 +115,12 @@ export default async function handler(req, res) {
         .maybeSingle();
       let nextNumero = (maxRow?.numero || 0) + 1;
 
-      let creados = 0;
+      // Mapa codigo -> categoria, para poder mostrar Cortante/Topper/Vincha en cada item
+      const { data: allProducts } = await source.from('products').select('code, category');
+      const categoriaPorCodigo = {};
+      (allProducts || []).forEach((p) => { if (p.code) categoriaPorCodigo[p.code] = p.category || ''; });
+
+      let creados = 0, actualizados = 0;
       const errores = [];
 
       for (const inv of pendingInvoices) {
@@ -112,35 +128,45 @@ export default async function handler(req, res) {
           qty: it.qty,
           codigo: it.code || "",
           nombre: it.name,
+          categoria: categoriaPorCodigo[it.code] || "",
           precio: it.price || 0,
           estado_item: "entregado",
         }));
 
-        const nuevoPedido = {
-          id: crypto.randomUUID(),
-          numero: nextNumero,
-          cliente_id: COTILLON_CLIENTE_ID,
-          estado: "entregado",
-          fecha_pedido: (inv.created_at || new Date().toISOString()).slice(0, 10),
+        const datosPedido = {
           total: inv.total || 0,
-          created_at: inv.created_at || new Date().toISOString(),
+          fecha_pedido: (inv.created_at || new Date().toISOString()).slice(0, 10),
           pago_estado: inv.payment_status === "pagado" ? "pagado" : "pendiente",
           pago_monto: inv.payment_status === "pagado" ? 0 : (inv.total || 0),
           items_detalle: itemsDetalle,
         };
 
-        const { error: insErr } = await target.from('pedidos').insert(nuevoPedido);
-        if (insErr) {
-          errores.push(`${inv.number}: ${insErr.message}`);
-          continue;
+        if (inv.synced_pedido_id) {
+          // Ya existia -> UPDATE del pedido existente (esto es lo que faltaba)
+          const { error: updErr } = await target.from('pedidos').update(datosPedido).eq('id', inv.synced_pedido_id);
+          if (updErr) { errores.push(`${inv.number}: ${updErr.message}`); continue; }
+          actualizados++;
+        } else {
+          // No existia todavia -> INSERT de un pedido nuevo
+          const nuevoPedido = {
+            id: crypto.randomUUID(),
+            numero: nextNumero,
+            cliente_id: COTILLON_CLIENTE_ID,
+            estado: "entregado",
+            created_at: inv.created_at || new Date().toISOString(),
+            ...datosPedido,
+          };
+          const { error: insErr } = await target.from('pedidos').insert(nuevoPedido);
+          if (insErr) { errores.push(`${inv.number}: ${insErr.message}`); continue; }
+          await source.from('invoices').update({ synced_pedido_id: nuevoPedido.id }).eq('id', inv.id);
+          creados++;
+          nextNumero++;
         }
 
-        await source.from('invoices').update({ synced_to_angels: true, synced_pedido_id: nuevoPedido.id }).eq('id', inv.id);
-        creados++;
-        nextNumero++;
+        await source.from('invoices').update({ synced_to_angels: true }).eq('id', inv.id);
       }
 
-      results.pedidos_reales = `${creados} pedido(s) creado(s) en el CRM${errores.length ? " · errores: " + errores.join(" | ") : ""}`;
+      results.pedidos_reales = `${creados} creado(s), ${actualizados} actualizado(s) en el CRM${errores.length ? " · errores: " + errores.join(" | ") : ""}`;
     }
   } catch (err) {
     results.pedidos_reales_error = String(err);
