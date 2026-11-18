@@ -1,45 +1,59 @@
 // ============================================================
-// api/sync-to-angels.js
-// 1) Copia productos/facturas/pedidos/movimientos de Cotillón a
-//    tablas espejo en el CRM de Angels (cotillon_*), para tener
-//    todo visible ahí también.
-// 2) Además, por cada factura NUEVA de Cotillón, crea un PEDIDO
-//    de verdad en la tabla `pedidos` real del CRM de Angels,
-//    integrado con tus pedidos de siempre (mismo cliente,
-//    mismo formato de items_detalle, numeración correlativa).
+// api/sync-to-angels.js  (VERSION LIVIANA)
+// Antes: cada 45 s copiaba TODAS las tablas al CRM y hacia ~175 consultas
+// al catalogo, aunque no hubiera nada nuevo. Eso agoto el trafico gratis.
+// Ahora:
+//   1) Primero hace UNA consulta chica: ¿hay facturas nuevas o editadas?
+//   2) Si no hay nada y no es la corrida diaria completa -> termina al toque.
+//   3) Si hay facturas pendientes (o ?full=1) -> sincroniza, pero comparando
+//      en memoria y escribiendo solo lo que cambio.
 //
 // Variables de entorno necesarias en Vercel:
 //   COTILLON_SUPABASE_URL, COTILLON_SERVICE_KEY
-//   ANGELS_SUPABASE_URL, ANGELS_SERVICE_KEY
+//   ANGELS_SUPABASE_URL,   ANGELS_SERVICE_KEY
 // ============================================================
 
 import { createClient } from '@supabase/supabase-js';
 
-const COTILLON_CLIENTE_ID = "9fb57dfa-8242-4f34-a82d-10bf747c0fb1"; // "Cotillón Arco Iris" en tabla clientes
+const COTILLON_CLIENTE_ID = "9fb57dfa-8242-4f34-a82d-10bf747c0fb1"; // "COTILLON ARCO IRIS" en tabla clientes del CRM
 
 export default async function handler(req, res) {
-  // Nota: este endpoint ahora tambien lo dispara la propia app (ya protegida
-  // por el login de Supabase) cada 45s para mantener todo sincronizado solo,
-  // ademas del cron. Por eso ya no exige el CRON_SECRET.
+  const full = (req.query && req.query.full === '1');
 
   const source = createClient(process.env.COTILLON_SUPABASE_URL, process.env.COTILLON_SERVICE_KEY);
   const target = createClient(process.env.ANGELS_SUPABASE_URL, process.env.ANGELS_SERVICE_KEY);
-
   const results = {};
 
-  // --- 1) Sincronización espejo (visibilidad general) ---
+  // --- 0) ¿Hay algo para hacer? (consulta chica) ---
+  const { data: pendingInvoices, error: pendErr } = await source
+    .from('invoices')
+    .select('*')
+    .or('synced_to_angels.is.null,synced_to_angels.eq.false');
+
+  if (pendErr) {
+    return res.status(200).json({ ok: false, syncedAt: new Date().toISOString(), error: `no se pudo leer facturas: ${pendErr.message}` });
+  }
+  const hayPendientes = !!(pendingInvoices && pendingInvoices.length);
+
+  if (!full && !hayPendientes) {
+    return res.status(200).json({ ok: true, syncedAt: new Date().toISOString(), skipped: 'sin cambios' });
+  }
+
+  // --- 1) Copia espejo (solo si hay cambios o en la corrida diaria) ---
   async function syncMirror(sourceTable, targetTable, limit) {
     let query = source.from(sourceTable).select('*');
     if (limit) query = query.order('created_at', { ascending: false }).limit(limit);
     const { data, error: readErr } = await query;
-    if (readErr) { results[sourceTable] = `error leyendo: ${readErr.message}`; return; }
-    if (!data || data.length === 0) { results[sourceTable] = '0 registros'; return; }
+    if (readErr) { results[sourceTable] = `error leyendo: ${readErr.message}`; return null; }
+    if (!data || data.length === 0) { results[sourceTable] = '0 registros'; return data || []; }
     const { error: writeErr } = await target.from(targetTable).upsert(data, { onConflict: 'id' });
     results[sourceTable] = writeErr ? `error escribiendo: ${writeErr.message}` : `${data.length} sincronizados`;
+    return data;
   }
 
+  let cotillonProducts = null;
   try {
-    await syncMirror('products', 'cotillon_products');
+    cotillonProducts = await syncMirror('products', 'cotillon_products');
     await syncMirror('invoices', 'cotillon_invoices');
     await syncMirror('pedidos', 'cotillon_pedidos');
     await syncMirror('movements', 'cotillon_movements', 500);
@@ -47,74 +61,59 @@ export default async function handler(req, res) {
     results.mirror_error = String(err);
   }
 
-  // --- 2) Reflejar productos de Cotillón en el Catálogo del CRM (sin pisar lo cargado a mano) ---
+  // --- 2) Reflejar productos en el Catalogo del CRM (comparando en memoria) ---
   try {
-    const { data: cotillonProducts, error: prodErr } = await source.from('products').select('*');
-    if (prodErr) {
-      results.catalogo = `error leyendo productos: ${prodErr.message}`;
-    } else if (!cotillonProducts || cotillonProducts.length === 0) {
+    if (!cotillonProducts) {
+      const r = await source.from('products').select('*');
+      cotillonProducts = r.data || [];
+    }
+    if (cotillonProducts.length === 0) {
       results.catalogo = '0 productos';
     } else {
-      let creados = 0, actualizados = 0;
-      const catErrors = [];
+      // Una sola lectura del catalogo. Si hay codigos repetidos se usa el mas viejo.
+      const { data: cat, error: catErr } = await target
+        .from('catalogo')
+        .select('id, codigo, nombre, precio_venta, categoria, created_at')
+        .order('created_at', { ascending: true });
+      if (catErr) throw new Error(catErr.message);
+      const porCodigo = new Map();
+      (cat || []).forEach((c) => { if (!porCodigo.has(c.codigo)) porCodigo.set(c.codigo, c); });
+
+      const nuevos = [];
+      let actualizados = 0;
+      const errores = [];
       for (const p of cotillonProducts) {
         if (!p.code) continue;
-        // OJO: usar .limit(1) en vez de .maybeSingle(). maybeSingle() tira error si
-        // encuentra MAS de una fila con ese codigo, y como no se chequeaba ese error,
-        // el código pensaba "no existe" y volvía a insertar -> esto fue lo que generó
-        // los cientos de duplicados en el catálogo.
-        const { data: existingRows } = await target.from('catalogo').select('id').eq('codigo', p.code).order('created_at', { ascending: true }).limit(1);
-        const existing = existingRows && existingRows[0];
-        if (existing) {
-          const { error: upErr } = await target.from('catalogo').update({
-            nombre: p.name,
-            precio_venta: p.price || 0,
-            categoria: p.category || 'Otro',
-          }).eq('id', existing.id);
-          if (upErr) catErrors.push(`${p.code}: ${upErr.message}`); else actualizados++;
-        } else {
-          const { error: insErr } = await target.from('catalogo').insert({
-            codigo: p.code,
-            nombre: p.name,
-            precio_venta: p.price || 0,
-            categoria: p.category || 'Otro',
-          });
-          if (insErr) catErrors.push(`${p.code}: ${insErr.message}`); else creados++;
+        const nombre = p.name;
+        const precio = p.price || 0;
+        const categoria = p.category || 'Otro';
+        const e = porCodigo.get(p.code);
+        if (!e) {
+          nuevos.push({ codigo: p.code, nombre, precio_venta: precio, categoria });
+        } else if (e.nombre !== nombre || Number(e.precio_venta) !== Number(precio) || e.categoria !== categoria) {
+          const { error: upErr } = await target.from('catalogo')
+            .update({ nombre, precio_venta: precio, categoria }).eq('id', e.id);
+          if (upErr) errores.push(`${p.code}: ${upErr.message}`); else actualizados++;
+          porCodigo.set(p.code, { ...e, nombre, precio_venta: precio, categoria });
         }
       }
-      results.catalogo = `${creados} nuevo(s), ${actualizados} actualizado(s)${catErrors.length ? " · errores: " + catErrors.join(" | ") : ""}`;
+      let creados = 0;
+      for (let i = 0; i < nuevos.length; i += 100) {
+        const lote = nuevos.slice(i, i + 100);
+        const { error: insErr } = await target.from('catalogo').insert(lote);
+        if (insErr) errores.push(`alta de lote: ${insErr.message}`); else creados += lote.length;
+      }
+      results.catalogo = `${creados} nuevo(s), ${actualizados} actualizado(s)${errores.length ? ' · errores: ' + errores.join(' | ') : ''}`;
     }
   } catch (err) {
     results.catalogo_error = String(err);
   }
 
-  // --- 2) Crear o ACTUALIZAR pedidos reales en el CRM de Angels a partir de facturas ---
-  // synced_to_angels = false puede significar dos cosas:
-  //   a) factura nueva, nunca sincronizada  -> synced_pedido_id es null -> CREAR pedido
-  //   b) factura ya sincronizada, pero EDITADA despues (el index.html la marca de
-  //      nuevo como synced_to_angels:false al guardar cambios) -> synced_pedido_id
-  //      ya tiene un valor -> ACTUALIZAR ese mismo pedido en vez de crear otro
+  // --- 3) Crear o ACTUALIZAR pedidos reales en el CRM a partir de facturas ---
   try {
-    const { data: pendingInvoices, error: readErr } = await source
-      .from('invoices')
-      .select('*')
-      .or('synced_to_angels.is.null,synced_to_angels.eq.false');
-
-    if (readErr) {
-      results.pedidos_reales = `error leyendo facturas: ${readErr.message}`;
-    } else if (!pendingInvoices || pendingInvoices.length === 0) {
+    if (!hayPendientes) {
       results.pedidos_reales = 'sin facturas nuevas';
     } else {
-      // Sacamos el próximo número correlativo una sola vez (solo se usa para las nuevas)
-      const { data: maxRow } = await target
-        .from('pedidos')
-        .select('numero')
-        .order('numero', { ascending: false })
-        .limit(1)
-        .maybeSingle();
-      let nextNumero = (maxRow?.numero || 0) + 1;
-
-      // Mapa codigo -> categoria, para poder mostrar Cortante/Topper/Vincha en cada item
       const { data: allProducts } = await source.from('products').select('code, category');
       const categoriaPorCodigo = {};
       (allProducts || []).forEach((p) => { if (p.code) categoriaPorCodigo[p.code] = p.category || ''; });
@@ -141,15 +140,13 @@ export default async function handler(req, res) {
         };
 
         if (inv.synced_pedido_id) {
-          // Ya existia -> UPDATE del pedido existente (esto es lo que faltaba)
           const { error: updErr } = await target.from('pedidos').update(datosPedido).eq('id', inv.synced_pedido_id);
           if (updErr) { errores.push(`${inv.number}: ${updErr.message}`); continue; }
           actualizados++;
         } else {
-          // No existia todavia -> INSERT de un pedido nuevo
+          // El numero lo asigna la base del CRM (secuencia), asi no se pisa con los pedidos cargados a mano
           const nuevoPedido = {
             id: crypto.randomUUID(),
-            numero: nextNumero,
             cliente_id: COTILLON_CLIENTE_ID,
             estado: "entregado",
             created_at: inv.created_at || new Date().toISOString(),
@@ -159,17 +156,16 @@ export default async function handler(req, res) {
           if (insErr) { errores.push(`${inv.number}: ${insErr.message}`); continue; }
           await source.from('invoices').update({ synced_pedido_id: nuevoPedido.id }).eq('id', inv.id);
           creados++;
-          nextNumero++;
         }
 
         await source.from('invoices').update({ synced_to_angels: true }).eq('id', inv.id);
       }
 
-      results.pedidos_reales = `${creados} creado(s), ${actualizados} actualizado(s) en el CRM${errores.length ? " · errores: " + errores.join(" | ") : ""}`;
+      results.pedidos_reales = `${creados} creado(s), ${actualizados} actualizado(s) en el CRM${errores.length ? ' · errores: ' + errores.join(' | ') : ''}`;
     }
   } catch (err) {
     results.pedidos_reales_error = String(err);
   }
 
-  res.status(200).json({ ok: true, syncedAt: new Date().toISOString(), results });
+  res.status(200).json({ ok: true, full, syncedAt: new Date().toISOString(), results });
 }
